@@ -127,6 +127,10 @@
 		CE8DA0832517C41A008C44E8 /* libkmod.a in Frameworks */ = {isa = PBXBuildFile; fileRef = CE8DA0822517C41A008C44E8 /* libkmod.a */; };
 		CEA03B5E20EE825A00BA842F /* NRed.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CEA03B5C20EE825A00BA842F /* NRed.cpp */; };
 		CEA03B5F20EE825A00BA842F /* NRed.hpp in Headers */ = {isa = PBXBuildFile; fileRef = CEA03B5D20EE825A00BA842F /* NRed.hpp */; };
+		EF0500010000000000000001 /* DisplayLink.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EF0500020000000000000001 /* DisplayLink.cpp */; };
+		EF0500010000000000000002 /* DisplayLink.hpp in Headers */ = {isa = PBXBuildFile; fileRef = EF0500020000000000000002 /* DisplayLink.hpp */; };
+		EF0500010000000000000003 /* DisplayData.hpp in Headers */ = {isa = PBXBuildFile; fileRef = EF0500020000000000000003 /* DisplayData.hpp */; };
+		EF0500010000000000000004 /* DisplayABI.hpp in Headers */ = {isa = PBXBuildFile; fileRef = EF0500020000000000000004 /* DisplayABI.hpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -310,6 +314,10 @@
 		CE8DA0822517C41A008C44E8 /* libkmod.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libkmod.a; path = MacKernelSDK/Library/x86_64/libkmod.a; sourceTree = SOURCE_ROOT; };
 		CEA03B5C20EE825A00BA842F /* NRed.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = NRed.cpp; sourceTree = "<group>"; };
 		CEA03B5D20EE825A00BA842F /* NRed.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = NRed.hpp; sourceTree = "<group>"; };
+		EF0500020000000000000001 /* DisplayLink.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = DisplayLink.cpp; sourceTree = "<group>"; };
+		EF0500020000000000000002 /* DisplayLink.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = DisplayLink.hpp; sourceTree = "<group>"; };
+		EF0500020000000000000003 /* DisplayData.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = DisplayData.hpp; sourceTree = "<group>"; };
+		EF0500020000000000000004 /* DisplayABI.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = DisplayABI.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -346,6 +354,8 @@
 		1C748C291C21952C0024EED2 /* NootedRed */ = {
 			isa = PBXGroup;
 			children = (
+				EF0500020000000000000002 /* DisplayLink.hpp */,
+				EF0500020000000000000001 /* DisplayLink.cpp */,
 				407905642CF6F2F5000900FA /* AGDC */,
 				4030EB362E37E1D90070E610 /* Firmware */,
 				40B9AEC62E991192000F05ED /* GPUDriversAMD */,
@@ -564,6 +574,7 @@
 			isa = PBXGroup;
 			children = (
 				4012096B2CE2FD96006E2812 /* DPCD.hpp */,
+				EF0500020000000000000003 /* DisplayData.hpp */,
 				4091276C2CE2F681004DBDB5 /* SignalTypes.hpp */,
 			);
 			path = DC;
@@ -616,6 +627,7 @@
 				40E812F32CF5A1FB004FDCC7 /* AmdDeviceMemoryManager.hpp */,
 				40B037E02E951D2B0060EAD4 /* Attributes.hpp */,
 				40F059732E6DFEE5009E6D2F /* FramebufferInfo.hpp */,
+				EF0500020000000000000004 /* DisplayABI.hpp */,
 				409127582CE2EBCD004DBDB5 /* VidMemType.hpp */,
 				40A01704302BBE14007EDA79 /* BiosParser.hpp */,
 				40F43C69302BC94700A7DDE9 /* BiosParser.cpp */,
@@ -655,6 +667,9 @@
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EF0500010000000000000004 /* DisplayABI.hpp in Headers */,
+				EF0500010000000000000003 /* DisplayData.hpp in Headers */,
+				EF0500010000000000000002 /* DisplayLink.hpp in Headers */,
 				EF0400030000000000000002 /* DeviceProfile.hpp in Headers */,
 				EF0400030000000000000010 /* VDA.hpp in Headers */,
 				EF0400030000000000000011 /* VCNBridge.hpp in Headers */,
@@ -822,6 +837,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EF0500010000000000000001 /* DisplayLink.cpp in Sources */,
 				EF0400010000000000000001 /* UserPatches.cpp in Sources */,
 				EF0400010000000000000002 /* DeviceProfile.cpp in Sources */,
 				EF0400010000000000000010 /* VDA.cpp in Sources */,

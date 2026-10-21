@@ -22,6 +22,7 @@
 // along with this work.  If not, see https://git.chefkiss.dev/ChefKiss/OpenKnowledge/raw/branch/master/LICENSE-v1.md.
 
 #include <Backlight.hpp>
+#include <DisplayLink.hpp>
 #include <GPUDriversAMD/DC/SignalTypes.hpp>
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_devinfo.hpp>
@@ -87,6 +88,7 @@ Backlight::Backlight()
 
 void Backlight::init()
 {
+    PE_parse_boot_argn("NRedMaxBacklightMillinits", &this->maxBacklightMillinits, sizeof(this->maxBacklightMillinits));
     auto bkltArg = BaseDeviceInfo::get().modelType == WIOKit::ComputerModel::ComputerLaptop;
     PE_parse_boot_argn("AMDBacklight", &bkltArg, sizeof(bkltArg));
     if (!bkltArg) { return; }
@@ -189,19 +191,46 @@ IOReturn Backlight::wrapSetAttributeForConnection(IOService* const framebuffer, 
 
     if (singleton().maxBacklightLvl == 0) { return kIOReturnInternalError; }
 
-    const auto percentage = singleton().curBacklightLvl * 100 / singleton().maxBacklightLvl;
-
-    if (singleton().supportsAUX) {
-        const auto auxValue = (singleton().maxBacklightMillinits * percentage) / 100;
-        if (singleton().orgDcLinkSetBacklightLevelNits(singleton().embeddedPanelLink, true, auxValue, 50)) {
+    auto&               mod     = singleton();
+    const UInt64        bounded = mod.curBacklightLvl > mod.maxBacklightLvl ? mod.maxBacklightLvl : mod.curBacklightLvl;
+    IODisplayModeID     mode    = 0;
+    IOIndex             depth   = 0;
+    IOTimingInformation timing{};
+    timing.flags                         = kIODetailedTimingValid;
+    auto*            fb                  = OSDynamicCast(IOFramebuffer, framebuffer);
+    const bool       timingKnown         = (fb && fb->getCurrentDisplayMode(&mode, &depth) == kIOReturnSuccess
+                                            && fb->getTimingInfoForDisplayMode(mode, &timing) == kIOReturnSuccess
+                                            && (timing.flags & kIODetailedTimingValid))
+                                           || DisplayLink::singleton().queryTiming(framebuffer, mode, depth, timing);
+    const auto       range               = timingKnown ? timing.detailedInfo.v2.dynamicRange : 0;
+    constexpr UInt16 traditionalGammaSDR = 0x0020;    // IOGraphicsTypes REV 72; absent in older kernel SDKs.
+    const bool       isHDR = range
+                             & (kIODynamicRangeHDR10 | kIODynamicRangeDolbyNormalMode | kIODynamicRangeDolbyTunnelMode
+                                | kIODynamicRangeTraditionalGammaHDR);
+    const bool       knownRange = timingKnown && (isHDR || (range & (kIODynamicRangeSDR | traditionalGammaSDR)));
+    if (knownRange && !isHDR) {
+        const auto result =
+            DisplayLink::singleton().setSDRBacklight(mod.embeddedPanelLink, mod.curBacklightLvl, mod.maxBacklightLvl);
+        if (result == DisplayData::BrightnessResult::Success) { return kIOReturnSuccess; }
+        // Once an AUX write was attempted, do not overwrite it using a different brightness interface.
+        if (result == DisplayData::BrightnessResult::Failed) { return kIOReturnDeviceError; }
+    }
+    // Capabilities can be zero at link creation. Read the current value when selecting the native path.
+    const auto caps = mod.dcLinkCapsField(mod.embeddedPanelLink);
+    const bool useAUX =
+        knownRange ? (isHDR ? caps.hdrAUXBacklightControl : caps.sdrAUXBacklightControl) : mod.supportsAUX;
+    if (useAUX) {
+        // The nits API needs a real physical maximum. Without one, leave the native handler's
+        // result intact instead of mapping every panel to the old assumed 512-nit ceiling.
+        if (!mod.maxBacklightMillinits) { return ret; }
+        const auto auxValue = static_cast<UInt32>(bounded * mod.maxBacklightMillinits / mod.maxBacklightLvl);
+        if (mod.orgDcLinkSetBacklightLevelNits(mod.embeddedPanelLink, knownRange ? isHDR : true, auxValue, 50)) {
             return kIOReturnSuccess;
         }
     }
     else {
-        const auto pwmValue = (percentage * 0xFFFF) / 100;
-        if (singleton().orgDcLinkSetBacklightLevel(singleton().embeddedPanelLink, pwmValue, 0)) {
-            return kIOReturnSuccess;
-        }
+        const auto pwmValue = static_cast<UInt32>(bounded * 0xFFFF / mod.maxBacklightLvl);
+        if (mod.orgDcLinkSetBacklightLevel(mod.embeddedPanelLink, pwmValue, 0)) { return kIOReturnSuccess; }
     }
 
     return kIOReturnDeviceError;
@@ -234,9 +263,7 @@ void* Backlight::wrapLinkCreate(void* data)
             if (singleton().embeddedPanelLink == nullptr) {
                 singleton().embeddedPanelLink = ret;
                 const auto& linkCaps          = singleton().dcLinkCapsField(ret);
-                // TODO: PWM should be used for SDR mode on LCD HDR panels,
-                // but AUX for HDR mode. Linux doesn't support HDR properly,
-                // but macOS does, so here's another thing to fix.
+                // Legacy fallback only. The callback selects SDR/HDR from live timing/capabilities.
                 singleton().supportsAUX = linkCaps.oled != 0;
             }
             else {

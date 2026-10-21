@@ -38,8 +38,8 @@ class Backlight
 
     ObjectField<DPCDSinkExtCaps> dcLinkCapsField;
     UInt32                       curBacklightLvl{0}, maxBacklightLvl{0xFFFF};
-    // TODO: Obtain the actual max brightness for the screen
-    UInt32                        maxBacklightMillinits{1000 * 512};
+    // Zero means unknown. Never invent a physical luminance ceiling for a panel.
+    UInt32                        maxBacklightMillinits{0};
     IONotifier*                   dispNotif{nullptr};
     void*                         embeddedPanelLink{nullptr};
     bool                          supportsAUX{false};

@@ -23,6 +23,7 @@
 #include "AmdAtomPspDirectoryDummy.hpp"
 #include "AmdAtomVramInfoIGP.hpp"
 #include <ASICCaps.hpp>
+#include <DisplayLink.hpp>
 #include <GPUDriversAMD/ATOMBIOS.hpp>
 #include <GPUDriversAMD/CAIL/ASICCaps.hpp>
 #include <GPUDriversAMD/FB/AmdAsicInfo.hpp>
@@ -207,6 +208,7 @@ void X6000FB::processKext(KernelPatcher& patcher, size_t id, mach_vm_address_t s
     if (kextRadeonX6000Framebuffer.loadIndex != id) { return; }
 
     NRed::singleton().hwLateInit();
+    DisplayLink::singleton().processKext(patcher, id, slide, size);
 
     CAILAsicCapsEntry*                   orgAsicCapsTable       = nullptr;
     void*                                orgAmdAsicInfoNavi10VT = nullptr;
