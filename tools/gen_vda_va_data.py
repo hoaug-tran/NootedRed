@@ -232,6 +232,20 @@ PATCHES = [
         "the 7-byte imul immediate is retargeted to the 0x30 stride used by getFeedbackSize.",
     },
     {
+        "key": "Vcn2EncoderSourcePitch",
+        "comment": "Vcn2Encoder::setEncodeParams: read true source texture pitch instead of reconstructed width",
+        "symbols": [
+            ("__ZN11Vcn2Encoder15setEncodeParamsEPvP15VAVendorTexture", 0x034),
+        ],
+        "find": "8B8A840000008B97240400000FAFD10FB6FAB80001000029F885FF0F44C701D0",
+        "replace": "8B82800000008B8A840000009090909090909090909090909090909090909090",
+        "rationale": "The stock VCN2 encoder calculates pitch from the encoded target width rather than "
+        "reading the source texture pitch fields. For APU / Retina screen recording, this produces mismatched "
+        "line strides (causing scanline distortion and horizontal squeeze) and misaligned chroma offsets "
+        "(severe crimson red tint). Replacing the width-reconstruction instructions with a direct read of "
+        "the texture pitch (+0x80) and element size (+0x84) preserves exact geometry and chroma balance.",
+    },
+    {
         "key": "ForceGfx9VideoProcessors",
         "comment": "VAFactory::createColourFormatConverterVP/createDitheringVP/createDeblockerVP: GFX9 branch",
         "symbols": [
@@ -575,6 +589,25 @@ def build_plan(cache: DyldCache, image: MachOImage):
                         print(f"[NootedRed VDA] {spec['key']} dynamically resolved at +{inst_start:#x}: find={find.hex()} replace={replace.hex()}", file=sys.stderr)
                     else:
                         actual = cache.read(site, len(find)) if site + len(find) <= func_end else b""
+            elif spec["key"] == "Vcn2EncoderSourcePitch":
+                window = cache.read(function, min(func_end - function, 512))
+                if site + len(find) <= func_end and cache.read(site, len(find)) == find:
+                    actual = find
+                else:
+                    cand_off = window.find(find)
+                    if cand_off >= 0:
+                        site = function + cand_off
+                        actual = find
+                    else:
+                        # Anchored by `31 d2 f7 f1` (xor %edx, %edx; div %ecx) before `89 43 18 d1 e8 89 43 1c`
+                        xor_idx = window.find(b"\x31\xd2\xf7\xf1")
+                        if xor_idx >= 32:
+                            site = function + (xor_idx - 32)
+                            find = window[xor_idx - 32 : xor_idx]
+                            actual = find
+                            print(f"[NootedRed VDA] Vcn2EncoderSourcePitch dynamically resolved at +{xor_idx - 32:#x}: find={find.hex()}", file=sys.stderr)
+                        else:
+                            actual = cache.read(site, len(find)) if site + len(find) <= func_end else b""
             elif spec["key"] == "ForceGfx9VideoProcessors":
                 window = cache.read(function, 128)
                 if site + len(find) <= func_end and cache.read(site, len(find)) == find:
@@ -834,7 +867,8 @@ def verify_header(text: str, cache: DyldCache, image: MachOImage, pages, entries
     expected_pages = {f"Page{index}" for index in range(len(pages))}
     if page_names != expected_pages:
         errors.append(f"header page images {sorted(page_names)} != expected {sorted(expected_pages)}")
-    if f'CacheUUID[] = "{profile["cache_uuid"]}"' not in text:
+    clean_uuid = profile["cache_uuid"].replace("-", "")
+    if f'CacheUUID[] = "{profile["cache_uuid"]}"' not in text and f'CacheUUID[] = "{clean_uuid}"' not in text:
         errors.append("header CacheUUID constant does not match the generated value")
     if f"ImageBase = 0x{image.base:X}ULL" not in text:
         errors.append("header ImageBase constant does not match the generated value")
