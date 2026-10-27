@@ -172,6 +172,7 @@ namespace
     #include "UserPatchesSonoma.inc"
     #include "UserPatchesSequoia.inc"
     #include "UserPatchesTahoe.inc"
+    #include "VDASignatures.inc"
 
     static const UInt8 kResolverMask32[] = {
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -448,7 +449,17 @@ void UserPatches::init()
             SYSLOG("UserPatch", "Resolver fallback enabled%s", this->resolverOnly ? " (resolver-only QA mode)" : "");
         }
     }
-    if (this->vdaEnabled) { SYSLOG("UserPatch", "Enabling user-space VDA driver patches (experimental)"); }
+    if (this->vdaEnabled) {
+        if (getKernelVersion() == KernelVersion::Ventura) {
+            this->vdaSignatures     = kVDAResolverSignatures_Ventura;
+            this->vdaSignatureCount = kVDAResolverSignatureCount_Ventura;
+        } else {
+            this->vdaSignatures     = kVDAResolverSignatures_Modern;
+            this->vdaSignatureCount = kVDAResolverSignatureCount_Modern;
+        }
+        for (auto& applied : this->vdaSignatureApplied) { applied = 0; }
+        SYSLOG("UserPatch", "Enabling user-space VDA driver patches with dynamic Resolver fallback");
+    }
     if (this->submitGuardEnabled) { SYSLOG("UserPatch", "Enabling user-space Metal SubmitGuard (free tail filler)"); }
     if (this->legacyBlendEnabled) { SYSLOG("UserPatch", "Enabling user-space Metal LegacyBlend (dual-quad fix)"); }
 }
@@ -861,6 +872,13 @@ static bool matchSignature(const UInt8* const bytes, const UserPatches::Signatur
             }
         }
         if (matches) {
+            if (sig.find != nullptr && sig.findSize > 0) {
+                if (offset + sig.patchOffset + sig.findSize > UserPatches::kPageSize ||
+                    memcmp(bytes + offset + sig.patchOffset, sig.find, sig.findSize) != 0) {
+                    continue;
+                }
+            }
+
             if (skipped < sig.skip) {
                 skipped++;
                 continue;
@@ -874,28 +892,81 @@ static bool matchSignature(const UInt8* const bytes, const UserPatches::Signatur
 
 void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOffset, void* const vnode)
 {
-    if (!this->resolverEnabled || this->signatures == nullptr || this->signatureCount == 0 || data == nullptr) {
+    if (data == nullptr || vnode == nullptr) {
         return;
     }
 
     // Gate 1: Vnode verification.
-    // Ensure the page strictly belongs to either the standalone AMDRadeonX5000GLDriver
-    // or the dyld shared cache. Never scan or modify random user binaries or daemons (such as NotificationCenter).
-    if (vnode == nullptr) {
-        return;
-    }
-
+    // Ensure the page strictly belongs to graphics/media drivers or the dyld shared cache.
+    // Never scan or modify random user binaries or daemons (such as NotificationCenter).
     const char* const vnodeName = vnode_getname(reinterpret_cast<vnode_t>(vnode));
     if (vnodeName == nullptr) {
         return;
     }
 
-    const bool isGLDriver = (strstr(vnodeName, "AMDRadeonX5000GLDriver") != nullptr);
+    const bool isGLDriver    = (strstr(vnodeName, "AMDRadeonX5000GLDriver") != nullptr);
+    const bool isVADriver    = (strstr(vnodeName, "AMDRadeonVADriver") != nullptr);
     const bool isSharedCache = (strstr(vnodeName, "dyld_shared_cache") != nullptr) ||
                                (strstr(vnodeName, "dyld") != nullptr);
     vnode_putname(vnodeName);
 
-    if (!isGLDriver && !isSharedCache) {
+    if (!isGLDriver && !isVADriver && !isSharedCache) {
+        return;
+    }
+
+    const auto* const bytes = static_cast<const UInt8*>(data);
+
+    // VDA Dynamic Resolver path (AMDRadeonVADriver2)
+    if (isVADriver && this->vdaEnabled && this->vdaSignatures != nullptr && this->vdaSignatureCount > 0) {
+        if (!VCNBridge::singleton().loadReady() || isFairPlayClient(current_task())) {
+            return;
+        }
+
+        bool vdaAllApplied = true;
+        for (size_t i = 0; i < this->vdaSignatureCount && i < kMaxVDASignatures; ++i) {
+            if (this->vdaSignatureApplied[i] < this->vdaSignatures[i].count) {
+                vdaAllApplied = false;
+                break;
+            }
+        }
+        if (vdaAllApplied) { return; }
+
+        for (size_t sigIdx = 0; sigIdx < this->vdaSignatureCount; sigIdx++) {
+            const auto& sig = this->vdaSignatures[sigIdx];
+            if (sigIdx < kMaxVDASignatures && this->vdaSignatureApplied[sigIdx] >= sig.count) {
+                continue;
+            }
+
+            size_t matchOffset = 0;
+            if (matchSignature(bytes, sig, matchOffset)) {
+                // Layer 4: Page boundary verification
+                if (matchOffset + sig.patchOffset + sig.replaceSize > kPageSize) {
+                    SYSLOG("UserPatch", "Resolver: VDA patch out of page bounds (0x%zX + 0x%zX + 0x%zX)",
+                           matchOffset, sig.patchOffset, sig.replaceSize);
+                    continue;
+                }
+
+                if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) {
+                    SYSLOG("UserPatch", "Resolver: failed to disable kernel write protection (VDA)");
+                    return;
+                }
+
+                memcpy(const_cast<UInt8*>(bytes) + matchOffset + sig.patchOffset, sig.replace, sig.replaceSize);
+
+                MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
+
+                SYSLOG("UserPatch", "Resolver patched VDA signature %zu at page offset 0x%zX", sigIdx, matchOffset);
+                if (sigIdx < kMaxVDASignatures) {
+                    this->vdaSignatureApplied[sigIdx]++;
+                }
+                const auto applied = static_cast<UInt32>(OSIncrementAtomic(&this->vdaAppliedCount) + 1);
+                NRed::singleton().setProp32("NRedVCNUserApplied", applied);
+            }
+        }
+        return;
+    }
+
+    if (!this->resolverEnabled || this->signatures == nullptr || this->signatureCount == 0) {
         return;
     }
 
@@ -907,8 +978,6 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
         }
     }
     if (allApplied) { return; }
-
-    const auto* const bytes = static_cast<const UInt8*>(data);
 
     // Gate 2: GL patches ONLY apply to AMDRadeonX5000GLDriver; Metal patches ONLY apply to dyld shared cache.
     if (isGLDriver) {

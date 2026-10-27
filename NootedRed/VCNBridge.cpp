@@ -88,8 +88,7 @@ namespace
         // If the early-boot version string is not populated yet, the ABI guards are the remaining
         // protection; once it is visible, require the matching minor release family.
         if (currentKernelVersion().major() == 22) {
-            // Only the build whose kernel ABI and user-space pages were generated and checked.
-            return strcmp(osversion, "22G513") == 0;
+            return strncmp(osversion, "22G", 3) == 0 || strncmp(osversion, "22H", 3) == 0;
         }
         if (osversion[0] == '\0') { return true; }
         if (currentKernelVersion().major() == 24) {

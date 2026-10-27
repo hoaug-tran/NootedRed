@@ -95,6 +95,8 @@ public:
         size_t       skip;
         size_t       count;
         UInt64       pageOffset;
+        const UInt8* find{nullptr};
+        size_t       findSize{0};
     };
 
     // Lookup-style patch for one user-space Mach-O image.
@@ -166,6 +168,7 @@ private:
 
     // Maximum amount of signature patches in a patch set.
     static constexpr size_t kMaxSignatures   = 8;
+    static constexpr size_t kMaxVDASignatures = 16;
 
     // Amount of patches handed over to Lilu's user patcher.
     static constexpr size_t kMaxLiluPatches = 8;
@@ -196,6 +199,9 @@ private:
     const SignaturePatch* signatures{nullptr};
     size_t                signatureCount{0};
     size_t                signatureApplied[kMaxSignatures]{};
+    const SignaturePatch* vdaSignatures{nullptr};
+    size_t                vdaSignatureCount{0};
+    size_t                vdaSignatureApplied[kMaxVDASignatures]{};
     bool                  resolverEnabled{false};
     bool                  resolverOnly{false};
 
