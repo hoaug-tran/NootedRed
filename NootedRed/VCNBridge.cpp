@@ -120,9 +120,7 @@ namespace
         // the engine (0x1638 is validated; the other VCN 2.x APUs are experimental) may use this bridge.  The
         // generated ABI guards and the exact build check remain the hard safety gates.
         const auto* const profile = DeviceProfile::current();
-        const bool venturaDevice = currentKernelVersion().major() != 22
-                                   || NRed::singleton().getDeviceID() == 0x1638;
-        return venturaDevice && isSupportedBuild() && !NRed::singleton().hasExternalVideo() && profile != nullptr
+        return isSupportedBuild() && !NRed::singleton().hasExternalVideo() && profile != nullptr
                && profile->media.vcnGeneration == DeviceProfile::kVcn2_2 && profile->media.hasVCN0;
     }
 
