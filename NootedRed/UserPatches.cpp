@@ -928,8 +928,8 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
 
     const auto* const bytes = static_cast<const UInt8*>(data);
 
-    // VDA Dynamic Resolver path (AMDRadeonVADriver2: loose bundle or dyld_shared_cache)
-    if ((isVADriver || isSharedCache) && this->vdaEnabled && this->vdaSignatures != nullptr && this->vdaSignatureCount > 0) {
+    // VDA Dynamic Resolver path (AMDRadeonVADriver2)
+    if (isVADriver && this->vdaEnabled && this->vdaSignatures != nullptr && this->vdaSignatureCount > 0) {
         if (VCNBridge::singleton().loadReady() && !isFairPlayClient(current_task())) {
             bool vdaAllApplied = true;
             for (size_t i = 0; i < this->vdaSignatureCount && i < kMaxVDASignatures; ++i) {
@@ -974,6 +974,7 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
                 }
             }
         }
+        return;
     }
 
     // AppleGVA Dynamic Resolver path (dyld_shared_cache or standalone AppleGVA bundle)
