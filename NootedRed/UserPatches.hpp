@@ -40,8 +40,8 @@
 //    `kPageSize` page image has to match byte for byte before `find` is replaced with `replace`, so a
 //    patch can never hit an unrelated binary.  See analysis/lilu-userpatch.md for the details.
 //
-// The GL table is gated by `-NRedGLFix`/`-NRedGLFixOff`; the optional VA/AppleGVA tables are a separate
-// `-NRedVDA` opt-in and only apply on the validated 0x1638 profile after the kernel VCN bridge is ready.
+// GLFix is enabled by default (pass -NRedNoGLFix to opt out); VDA hardware video acceleration is also
+// enabled by default (pass -NRedNoHEVC to disable HEVC, or -NRedNoVDA to disable VDA completely).
 // Both log under the `UserPatch` tag.
 class UserPatches
 {

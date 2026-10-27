@@ -26,7 +26,7 @@
 static const char* pathRadeonX6000Framebuffer =
     "/System/Library/Extensions/AMDRadeonX6000Framebuffer.kext/Contents/MacOS/AMDRadeonX6000Framebuffer";
 // The VCN2 engine lives in the X6000 accelerated driver.  A normal Renoir boot does not load it; VCNBridge
-// requests it from inside the X5000 accelerator start when -NRedVDA is set.
+// requests it from inside the X5000 accelerator start when VDA is enabled (default on).
 static const char* pathRadeonX6000 = "/System/Library/Extensions/AMDRadeonX6000.kext/Contents/MacOS/AMDRadeonX6000";
 static const char* pathRadeonX5000HWLibs = "/System/Library/Extensions/AMDRadeonX5000HWServices.kext/Contents/PlugIns/"
                                            "AMDRadeonX5000HWLibs.kext/Contents/MacOS/AMDRadeonX5000HWLibs";

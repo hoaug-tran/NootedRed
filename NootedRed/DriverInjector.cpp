@@ -97,65 +97,72 @@ bool DriverInjector::wrapAddDrivers(void* const self, OSArray* const array, cons
 
             if (strcmp(driver.identifier, "com.apple.kext.AMDRadeonX5000") == 0) {
                 const auto count = driver.personalities->getCount();
-                if (VDA::singleton().isAVCOnly()) {
+
+                // If hardware video acceleration is completely disabled (-NRedNoVDA):
+                if (!VDA::singleton().isRequested()) {
                     for (UInt32 i = 0; i < count; ++i) {
                         auto* const pDict = OSDynamicCast(OSDictionary, driver.personalities->getObject(i));
                         if (pDict != nullptr) {
+                            pDict->removeObject("IOGVACodec");
                             pDict->removeObject("IOGVAHEVCDecode");
                             pDict->removeObject("IOGVAHEVCDecodeCapabilities");
-                            if (!VDA::singleton().isHEVCEncodeAllowed()) {
+                            pDict->removeObject("IOGVAHEVCEncode");
+                            pDict->removeObject("IOGVAHEVCEncodeCapabilities");
+                            pDict->removeObject("IOGVAH264EncodeCapabilities");
+                        }
+                    }
+                    if (dict != nullptr) {
+                        dict->removeObject("IOGVACodec");
+                        dict->removeObject("IOGVAHEVCDecode");
+                        dict->removeObject("IOGVAHEVCDecodeCapabilities");
+                        dict->removeObject("IOGVAHEVCEncode");
+                        dict->removeObject("IOGVAHEVCEncodeCapabilities");
+                        dict->removeObject("IOGVAH264EncodeCapabilities");
+                    }
+                    DBGLOG("DriverInjector", "-NRedNoVDA active: stripped all hardware video acceleration capabilities from %s", driver.identifier);
+                }
+                else {
+                    // 1. HEVC Decode policy:
+                    // - If !isHEVCDecodeAllowed() (-NRedNoHEVC): strip IOGVAHEVCDecode and IOGVAHEVCDecodeCapabilities.
+                    // - Default: preserve full HEVC hardware decode (8-bit and 10-bit).
+                    if (!VDA::singleton().isHEVCDecodeAllowed()) {
+                        for (UInt32 i = 0; i < count; ++i) {
+                            auto* const pDict = OSDynamicCast(OSDictionary, driver.personalities->getObject(i));
+                            if (pDict != nullptr) {
+                                pDict->removeObject("IOGVAHEVCDecode");
+                                pDict->removeObject("IOGVAHEVCDecodeCapabilities");
+                            }
+                        }
+                        if (dict != nullptr) {
+                            dict->removeObject("IOGVAHEVCDecode");
+                            dict->removeObject("IOGVAHEVCDecodeCapabilities");
+                        }
+                        DBGLOG("DriverInjector", "-NRedNoHEVC active: stripped HEVC decode capabilities from %s", driver.identifier);
+                    }
+                    else {
+                        DBGLOG("DriverInjector", "Full HEVC hardware decode (8-bit and 10-bit) enabled for %s", driver.identifier);
+                    }
+
+                    // 2. HEVC Encode policy:
+                    // - If !isHEVCEncodeAllowed() (-NRedNoHEVC): strip IOGVAHEVCEncode and IOGVAHEVCEncodeCapabilities.
+                    // - Default: preserve 8-bit HEVC encode.
+                    if (!VDA::singleton().isHEVCEncodeAllowed()) {
+                        for (UInt32 i = 0; i < count; ++i) {
+                            auto* const pDict = OSDynamicCast(OSDictionary, driver.personalities->getObject(i));
+                            if (pDict != nullptr) {
                                 pDict->removeObject("IOGVAHEVCEncode");
                                 pDict->removeObject("IOGVAHEVCEncodeCapabilities");
                             }
                         }
-                    }
-                    if (VDA::singleton().isHEVCEncodeAllowed()) {
-                        DBGLOG("DriverInjector", "-NRedAVCEncode active: stripped HEVC decode, preserved HEVC encode for %s", driver.identifier);
-                    } else {
-                        DBGLOG("DriverInjector", "-NRedAVC active: stripped HEVC decode/encode capabilities from %s", driver.identifier);
-                    }
-                }
-                else if (!VDA::singleton().isHEVC10Allowed()) {
-                    // Restrict HEVC hardware decode for Profile 2 (Main 10 / 10-bit HDR) by setting its
-                    // VTMaxDecodeLevel to 0. When VideoToolbox checks the per-profile details, it sees
-                    // VTMaxDecodeLevel = 0, determines that the hardware decoder cannot satisfy the video stream's level,
-                    // and gracefully falls back to AppleSoftwareVideoDecoder (CPU software decoding).
-                    // This prevents VCN 2.2 ASIC lockups while preserving hardware decode for standard 8-bit HEVC and H.264.
-                    for (UInt32 i = 0; i < count; ++i) {
-                        auto* const pDict = OSDynamicCast(OSDictionary, driver.personalities->getObject(i));
-                        if (pDict == nullptr) { continue; }
-
-                        auto* const hevcCaps = OSDynamicCast(OSDictionary, pDict->getObject("IOGVAHEVCDecodeCapabilities"));
-                        if (hevcCaps == nullptr) { continue; }
-
-                        auto* const details = OSDynamicCast(OSDictionary, hevcCaps->getObject("VTPerProfileDetails"));
-                        if (details != nullptr) {
-                            auto* const p2Dict = OSDynamicCast(OSDictionary, details->getObject("2"));
-                            if (p2Dict != nullptr) {
-                                auto* const zeroNum = OSNumber::withNumber(static_cast<unsigned long long>(0), 32);
-                                if (zeroNum != nullptr) {
-                                    p2Dict->setObject("VTMaxDecodeLevel", zeroNum);
-                                    zeroNum->release();
-                                }
-                            }
+                        if (dict != nullptr) {
+                            dict->removeObject("IOGVAHEVCEncode");
+                            dict->removeObject("IOGVAHEVCEncodeCapabilities");
                         }
+                        DBGLOG("DriverInjector", "-NRedNoHEVC active: stripped HEVC encode capabilities from %s", driver.identifier);
                     }
-
-                    auto* const hevcCapsInDict = OSDynamicCast(OSDictionary, dict->getObject("IOGVAHEVCDecodeCapabilities"));
-                    if (hevcCapsInDict != nullptr) {
-                        auto* const details = OSDynamicCast(OSDictionary, hevcCapsInDict->getObject("VTPerProfileDetails"));
-                        if (details != nullptr) {
-                            auto* const p2Dict = OSDynamicCast(OSDictionary, details->getObject("2"));
-                            if (p2Dict != nullptr) {
-                                auto* const zeroNum = OSNumber::withNumber(static_cast<unsigned long long>(0), 32);
-                                if (zeroNum != nullptr) {
-                                    p2Dict->setObject("VTMaxDecodeLevel", zeroNum);
-                                    zeroNum->release();
-                                }
-                            }
-                        }
+                    else {
+                        DBGLOG("DriverInjector", "Preserved HEVC 8-bit encode capabilities for %s", driver.identifier);
                     }
-                    DBGLOG("DriverInjector", "Protected HEVC decode: capped Profile 2 (Main 10) VTMaxDecodeLevel to 0 to guard against VCN2 hardware hang (pass -NRedHEVC10 to override)");
                 }
             }
 

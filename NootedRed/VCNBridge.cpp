@@ -52,9 +52,7 @@ static VCNBridge moduleInstance;
 namespace
 {
 
-    const char* const kBootArgVDA = "-NRedVDA";
-    const char* const kBootArgAVC = "-NRedAVC";
-    const char* const kBootArgAVCEncode = "-NRedAVCEncode";
+    const char* const kBootArgNoVDA = "-NRedNoVDA";
     // Escape hatch: skip the bounded wait for VCN idle in the teardown paths.
     const char* const kBootArgNoDrain = "-NRedVCNNoDrain";
 
@@ -237,14 +235,14 @@ VCNBridge& VCNBridge::singleton() { return moduleInstance; }
 
 void VCNBridge::init()
 {
-    this->requested = checkKernelArgument(kBootArgVDA) || checkKernelArgument(kBootArgAVC) || checkKernelArgument(kBootArgAVCEncode);
+    this->requested = !checkKernelArgument(kBootArgNoVDA);
     this->noDrain = this->requested && checkKernelArgument(kBootArgNoDrain);
     if (this->noDrain) {
         NRed::singleton().setProp32("NRedVCNNoDrain", 1);
         SYSLOG("VCN", "VCN teardown drain disabled by boot argument");
     }
     if (!this->requested) {
-        DBGLOG("VCN", "VCN bridge is disabled; add -NRedVDA, -NRedAVC or -NRedAVCEncode to opt in");
+        DBGLOG("VCN", "VCN bridge is disabled by -NRedNoVDA");
         return;
     }
 

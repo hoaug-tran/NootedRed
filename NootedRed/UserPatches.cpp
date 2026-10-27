@@ -51,15 +51,14 @@ extern "C" {
 namespace
 {
 
-    const char* const kBootArgGLFix            = "-NRedGLFix";
+    const char* const kBootArgNoGLFix          = "-NRedNoGLFix";
     const char* const kBootArgGLFixOff         = "-NRedGLFixOff";
     const char* const kBootArgGLFixResolve     = "-NRedGLFixResolve";
     const char* const kBootArgGLFixResolveOnly = "-NRedGLFixResolveOnly";
     const char* const kBootArgGLFixResolveOff  = "-NRedGLFixResolveOff";
     const char* const kBootArgGLFixNoResolve   = "-NRedGLFixNoResolve";
-    const char* const kBootArgVDA              = "-NRedVDA";
-    const char* const kBootArgAVC              = "-NRedAVC";
-    const char* const kBootArgAVCEncode        = "-NRedAVCEncode";
+    const char* const kBootArgNoVDA            = "-NRedNoVDA";
+    const char* const kBootArgNoHEVC           = "-NRedNoHEVC";
     const char* const kBootArgNoSubmitGuard    = "-NRedNoSubmitGuard";
     const char* const kBootArgSubmitGuard      = "-NRedSubmitGuard";
     const char* const kBootArgNoLegacyBlend    = "-NRedNoLegacyBlend";
@@ -114,8 +113,8 @@ namespace
     }
 
     // The patch bytes and page images below are specific to one driver build, and the native backend hooks
-    // code signing page validation, so this is opt-in until the table has been filled in and tested.
-    constexpr bool kGLFixDefaultEnabled = false;
+    // code signing page validation. Enabled by default; pass -NRedNoGLFix to opt out.
+    constexpr bool kGLFixDefaultEnabled = true;
 
     // Arbitrary non-zero section id for `UserPatcher::BinaryModPatch`; Lilu's ABI treats zero as disabled.
     constexpr UInt32 kLiluPatchSection = 1;
@@ -423,8 +422,9 @@ void UserPatches::init()
     }
 
     this->enabled = kGLFixDefaultEnabled;
-    if (checkKernelArgument(kBootArgGLFix)) { this->enabled = true; }
-    if (checkKernelArgument(kBootArgGLFixOff)) { this->enabled = false; }
+    if (checkKernelArgument(kBootArgNoGLFix) || checkKernelArgument(kBootArgGLFixOff)) {
+        this->enabled = false;
+    }
 
     // The resolver is a GL-only fallback: it must never be active when the GL fix itself is off.
     this->resolverOnly    = this->enabled && checkKernelArgument(kBootArgGLFixResolveOnly);
@@ -432,9 +432,7 @@ void UserPatches::init()
                             && !checkKernelArgument(kBootArgGLFixResolveOff)
                             && !checkKernelArgument(kBootArgGLFixNoResolve);
 
-    this->vdaEnabled = checkKernelArgument(kBootArgVDA)
-                       || checkKernelArgument(kBootArgAVC)
-                       || checkKernelArgument(kBootArgAVCEncode);
+    this->vdaEnabled = !checkKernelArgument(kBootArgNoVDA);
 
     this->submitGuardEnabled = checkKernelArgument(kBootArgSubmitGuard) || !checkKernelArgument(kBootArgNoSubmitGuard);
     this->legacyBlendEnabled = checkKernelArgument(kBootArgLegacyBlend) || !checkKernelArgument(kBootArgNoLegacyBlend);
