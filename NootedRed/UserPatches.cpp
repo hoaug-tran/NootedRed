@@ -928,54 +928,52 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
 
     const auto* const bytes = static_cast<const UInt8*>(data);
 
-    // VDA Dynamic Resolver path (AMDRadeonVADriver2)
-    if (isVADriver && this->vdaEnabled && this->vdaSignatures != nullptr && this->vdaSignatureCount > 0) {
-        if (!VCNBridge::singleton().loadReady() || isFairPlayClient(current_task())) {
-            return;
-        }
-
-        bool vdaAllApplied = true;
-        for (size_t i = 0; i < this->vdaSignatureCount && i < kMaxVDASignatures; ++i) {
-            if (this->vdaSignatureApplied[i] < this->vdaSignatures[i].count) {
-                vdaAllApplied = false;
-                break;
-            }
-        }
-        if (vdaAllApplied) { return; }
-
-        for (size_t sigIdx = 0; sigIdx < this->vdaSignatureCount; sigIdx++) {
-            const auto& sig = this->vdaSignatures[sigIdx];
-            if (sigIdx < kMaxVDASignatures && this->vdaSignatureApplied[sigIdx] >= sig.count) {
-                continue;
+    // VDA Dynamic Resolver path (AMDRadeonVADriver2: loose bundle or dyld_shared_cache)
+    if ((isVADriver || isSharedCache) && this->vdaEnabled && this->vdaSignatures != nullptr && this->vdaSignatureCount > 0) {
+        if (VCNBridge::singleton().loadReady() && !isFairPlayClient(current_task())) {
+            bool vdaAllApplied = true;
+            for (size_t i = 0; i < this->vdaSignatureCount && i < kMaxVDASignatures; ++i) {
+                if (this->vdaSignatureApplied[i] < this->vdaSignatures[i].count) {
+                    vdaAllApplied = false;
+                    break;
+                }
             }
 
-            size_t matchOffset = 0;
-            if (matchSignature(bytes, sig, matchOffset)) {
-                // Layer 4: Page boundary verification
-                if (matchOffset + sig.patchOffset + sig.replaceSize > kPageSize) {
-                    SYSLOG("UserPatch", "Resolver: VDA patch out of page bounds (0x%zX + 0x%zX + 0x%zX)",
-                           matchOffset, sig.patchOffset, sig.replaceSize);
-                    continue;
+            if (!vdaAllApplied) {
+                for (size_t sigIdx = 0; sigIdx < this->vdaSignatureCount; sigIdx++) {
+                    const auto& sig = this->vdaSignatures[sigIdx];
+                    if (sigIdx < kMaxVDASignatures && this->vdaSignatureApplied[sigIdx] >= sig.count) {
+                        continue;
+                    }
+
+                    size_t matchOffset = 0;
+                    if (matchSignature(bytes, sig, matchOffset)) {
+                        // Layer 4: Page boundary verification
+                        if (matchOffset + sig.patchOffset + sig.replaceSize > kPageSize) {
+                            SYSLOG("UserPatch", "Resolver: VDA patch out of page bounds (0x%zX + 0x%zX + 0x%zX)",
+                                   matchOffset, sig.patchOffset, sig.replaceSize);
+                            continue;
+                        }
+
+                        if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) {
+                            SYSLOG("UserPatch", "Resolver: failed to disable kernel write protection (VDA)");
+                            return;
+                        }
+
+                        memcpy(const_cast<UInt8*>(bytes) + matchOffset + sig.patchOffset, sig.replace, sig.replaceSize);
+
+                        MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
+
+                        SYSLOG("UserPatch", "Resolver patched VDA signature %zu at page offset 0x%zX", sigIdx, matchOffset);
+                        if (sigIdx < kMaxVDASignatures) {
+                            this->vdaSignatureApplied[sigIdx]++;
+                        }
+                        const auto applied = static_cast<UInt32>(OSIncrementAtomic(&this->vdaAppliedCount) + 1);
+                        NRed::singleton().setProp32("NRedVCNUserApplied", applied);
+                    }
                 }
-
-                if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) {
-                    SYSLOG("UserPatch", "Resolver: failed to disable kernel write protection (VDA)");
-                    return;
-                }
-
-                memcpy(const_cast<UInt8*>(bytes) + matchOffset + sig.patchOffset, sig.replace, sig.replaceSize);
-
-                MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
-
-                SYSLOG("UserPatch", "Resolver patched VDA signature %zu at page offset 0x%zX", sigIdx, matchOffset);
-                if (sigIdx < kMaxVDASignatures) {
-                    this->vdaSignatureApplied[sigIdx]++;
-                }
-                const auto applied = static_cast<UInt32>(OSIncrementAtomic(&this->vdaAppliedCount) + 1);
-                NRed::singleton().setProp32("NRedVCNUserApplied", applied);
             }
         }
-        return;
     }
 
     // AppleGVA Dynamic Resolver path (dyld_shared_cache or standalone AppleGVA bundle)

@@ -46,6 +46,7 @@ Read-only: the cache and system files are only opened for reading.
 import argparse
 import hashlib
 import pathlib
+from pathlib import Path
 import plistlib
 import re
 import struct
@@ -100,6 +101,14 @@ PROFILES = {
         "namespace_suffix": "Sequoia",
         "output_name": "VDAVADataSequoia.hpp",
         "evidence_doc": "analysis/vda-1581-va-data.md",
+    },
+    ("15.8.2", "24H232"): {
+        "macos_version": "15.8.2 (24H232)",
+        "driver_version": "7.0.26",
+        "cache_uuid": "90DB0DEB-2344-3601-B011-B87312D74CFB",
+        "namespace_suffix": "Sequoia",
+        "output_name": "VDAVADataSequoia.hpp",
+        "evidence_doc": "analysis/vda-1582-va-data.md",
     },
     ("26.7.1", "25G241"): {
         "macos_version": "26.7.1 (25G241)",
