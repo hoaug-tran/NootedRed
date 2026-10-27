@@ -2,6 +2,7 @@
 # Build and toolchain output
 # ---------------------------------------------------------------------------
 build/
+DerivedData/
 .xmake/
 compile_commands.json
 .cache/
