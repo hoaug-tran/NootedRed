@@ -185,6 +185,90 @@ namespace
          kVDAFind_SourcePitch, sizeof(kVDAFind_SourcePitch)},
     };
     constexpr size_t kVDAResolverSignatureCount_Modern = arrsize(kVDAResolverSignatures_Modern);
+
+    // -------------------------------------------------------------------------
+    // AppleGVA: AVDGetGPUAccelerators -> branch redirect to force AMD accelerator
+    // -------------------------------------------------------------------------
+
+    // macOS 13 Ventura: `mov (%rbx), %rbx; test %rbx, %rbx; je <empty-return>`
+    static const UInt8 kGVACtx_Ventura[] = {
+        0x48, 0x8B, 0x1B, 0x48, 0x85, 0xDB,
+        0x0F, 0x84, 0xA0, 0x00, 0x00, 0x00,
+        0x48, 0x8D
+    };
+    static const UInt8 kGVAMask_Ventura[] = {
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFF
+    };
+    static const UInt8 kGVAFind_Ventura[]    = {0x0F, 0x84, 0xA0, 0x00, 0x00, 0x00};
+    static const UInt8 kGVAReplace_Ventura[] = {0x0F, 0x84, 0x70, 0x00, 0x00, 0x00};
+    static const UserPatches::SignaturePatch kGVAResolverSignature_Ventura = {
+        kGVACtx_Ventura, kGVAMask_Ventura, sizeof(kGVACtx_Ventura), 6,
+        kGVAReplace_Ventura, sizeof(kGVAReplace_Ventura), 0, 1, ~0ULL,
+        kGVAFind_Ventura, sizeof(kGVAFind_Ventura)
+    };
+
+    // macOS 14 Sonoma: `mov (%rdi), %r15; test %r15, %r15; je <empty-return>`
+    static const UInt8 kGVACtx_Sonoma[] = {
+        0x4D, 0x8B, 0x3F, 0x4D, 0x85, 0xFF,
+        0x0F, 0x84, 0x99, 0x00, 0x00, 0x00,
+        0x48, 0x8D
+    };
+    static const UInt8 kGVAMask_Sonoma[] = {
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFF
+    };
+    static const UInt8 kGVAFind_Sonoma[]    = {0x0F, 0x84, 0x99, 0x00, 0x00, 0x00};
+    static const UInt8 kGVAReplace_Sonoma[] = {0x0F, 0x84, 0x70, 0x00, 0x00, 0x00};
+    static const UserPatches::SignaturePatch kGVAResolverSignature_Sonoma = {
+        kGVACtx_Sonoma, kGVAMask_Sonoma, sizeof(kGVACtx_Sonoma), 6,
+        kGVAReplace_Sonoma, sizeof(kGVAReplace_Sonoma), 0, 1, ~0ULL,
+        kGVAFind_Sonoma, sizeof(kGVAFind_Sonoma)
+    };
+
+    // macOS 15 Sequoia: `test %r15, %r15; je <empty-return>; lea -0x158(%rbp), %rsi; mov %rbx, %rdi`
+    static const UInt8 kGVACtx_Sequoia[] = {
+        0x4D, 0x85, 0xFF,
+        0x0F, 0x84, 0xD6, 0x03, 0x00, 0x00,
+        0x48, 0x8D, 0xB5, 0xA8, 0xFE, 0xFF, 0xFF,
+        0x48, 0x89, 0xDF
+    };
+    static const UInt8 kGVAMask_Sequoia[] = {
+        0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF
+    };
+    static const UInt8 kGVAFind_Sequoia[]    = {0x0F, 0x84, 0xD6, 0x03, 0x00, 0x00};
+    static const UInt8 kGVAReplace_Sequoia[] = {0x0F, 0x84, 0x2A, 0x00, 0x00, 0x00};
+    static const UserPatches::SignaturePatch kGVAResolverSignature_Sequoia = {
+        kGVACtx_Sequoia, kGVAMask_Sequoia, sizeof(kGVACtx_Sequoia), 3,
+        kGVAReplace_Sequoia, sizeof(kGVAReplace_Sequoia), 0, 1, ~0ULL,
+        kGVAFind_Sequoia, sizeof(kGVAFind_Sequoia)
+    };
+
+    // macOS 26 Tahoe: `mov -0x158(%rbp), %r12; test %r12, %r12; je <empty-return>`
+    static const UInt8 kGVACtx_Tahoe[] = {
+        0x4C, 0x8B, 0xA5, 0xA8, 0xFE, 0xFF, 0xFF,
+        0x4D, 0x85, 0xE4,
+        0x0F, 0x84, 0x8C, 0x00, 0x00, 0x00,
+        0x48, 0x8D
+    };
+    static const UInt8 kGVAMask_Tahoe[] = {
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFF
+    };
+    static const UInt8 kGVAFind_Tahoe[]    = {0x0F, 0x84, 0x8C, 0x00, 0x00, 0x00};
+    static const UInt8 kGVAReplace_Tahoe[] = {0x0F, 0x84, 0x78, 0x00, 0x00, 0x00};
+    static const UserPatches::SignaturePatch kGVAResolverSignature_Tahoe = {
+        kGVACtx_Tahoe, kGVAMask_Tahoe, sizeof(kGVACtx_Tahoe), 10,
+        kGVAReplace_Tahoe, sizeof(kGVAReplace_Tahoe), 0, 1, ~0ULL,
+        kGVAFind_Tahoe, sizeof(kGVAFind_Tahoe)
+    };
 }
 
 #endif // VDASignatures_inc

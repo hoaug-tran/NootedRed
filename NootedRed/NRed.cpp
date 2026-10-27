@@ -60,7 +60,6 @@
 // produced by tools/gen_vda_*_data.py and are committed with this branch; the VCN bridge itself does
 // not depend on them, but VDA user-space patching is a no-op if they are absent.
 #include <VDAVADataVentura.hpp>
-#include <VDAGVADataVentura.hpp>
 #if __has_include(<VDAVADataSonoma.hpp>)
 #include <VDAVADataSonoma.hpp>
 #endif
@@ -72,18 +71,6 @@
 #endif
 #if __has_include(<VDAVAData.hpp>)
 #include <VDAVAData.hpp>
-#endif
-#if __has_include(<VDAGVADataSonoma.hpp>)
-#include <VDAGVADataSonoma.hpp>
-#endif
-#if __has_include(<VDAGVADataSequoia.hpp>)
-#include <VDAGVADataSequoia.hpp>
-#endif
-#if __has_include(<VDAGVADataTahoe.hpp>)
-#include <VDAGVADataTahoe.hpp>
-#endif
-#if __has_include(<VDAGVAData.hpp>)
-#include <VDAGVAData.hpp>
 #endif
 
 static NRed moduleInstance;
@@ -103,23 +90,13 @@ void NRed::init()
     this->forceVDA = checkKernelArgument("-NRedForceVDA");
 
     if (getKernelVersion() == KernelVersion::Ventura) {
-        // Exact stock 22G513 pages, verified against the cache CodeDirectory before generation.
-        // The VCN bridge additionally requires 22G513 and the validated Cezanne 0x1638 device.
         UserPatches::singleton().registerVDAFix(VDAVADataVentura::Patches,
                                                arrsize(VDAVADataVentura::Patches));
-        UserPatches::singleton().registerVDAFix(VDAGVADataVentura::Patches,
-                                               arrsize(VDAGVADataVentura::Patches));
     } else if (getKernelVersion() == KernelVersion::Sonoma) {
 #if __has_include(<VDAVADataSonoma.hpp>)
         if constexpr (arrsize(VDAVADataSonoma::Patches) > 0) {
             UserPatches::singleton().registerVDAFix(VDAVADataSonoma::Patches,
                                                     arrsize(VDAVADataSonoma::Patches));
-        }
-#endif
-#if __has_include(<VDAGVADataSonoma.hpp>)
-        if constexpr (arrsize(VDAGVADataSonoma::Patches) > 0) {
-            UserPatches::singleton().registerVDAFix(VDAGVADataSonoma::Patches,
-                                                    arrsize(VDAGVADataSonoma::Patches));
         }
 #endif
     } else if (getKernelVersion() >= KernelVersion::Tahoe) {
@@ -129,23 +106,11 @@ void NRed::init()
                                                     arrsize(VDAVADataTahoe::Patches));
         }
 #endif
-#if __has_include(<VDAGVADataTahoe.hpp>)
-        if constexpr (arrsize(VDAGVADataTahoe::Patches) > 0) {
-            UserPatches::singleton().registerVDAFix(VDAGVADataTahoe::Patches,
-                                                    arrsize(VDAGVADataTahoe::Patches));
-        }
-#endif
     } else if (getKernelVersion() >= KernelVersion::Sequoia) {
 #if __has_include(<VDAVADataSequoia.hpp>)
         if constexpr (arrsize(VDAVADataSequoia::Patches) > 0) {
             UserPatches::singleton().registerVDAFix(VDAVADataSequoia::Patches,
                                                     arrsize(VDAVADataSequoia::Patches));
-        }
-#endif
-#if __has_include(<VDAGVADataSequoia.hpp>)
-        if constexpr (arrsize(VDAGVADataSequoia::Patches) > 0) {
-            UserPatches::singleton().registerVDAFix(VDAGVADataSequoia::Patches,
-                                                    arrsize(VDAGVADataSequoia::Patches));
         }
 #endif
     }

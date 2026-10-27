@@ -453,11 +453,22 @@ void UserPatches::init()
         if (getKernelVersion() == KernelVersion::Ventura) {
             this->vdaSignatures     = kVDAResolverSignatures_Ventura;
             this->vdaSignatureCount = kVDAResolverSignatureCount_Ventura;
+            this->gvaSignature      = &kGVAResolverSignature_Ventura;
+        } else if (getKernelVersion() == KernelVersion::Sonoma) {
+            this->vdaSignatures     = kVDAResolverSignatures_Modern;
+            this->vdaSignatureCount = kVDAResolverSignatureCount_Modern;
+            this->gvaSignature      = &kGVAResolverSignature_Sonoma;
+        } else if (getKernelVersion() >= KernelVersion::Tahoe) {
+            this->vdaSignatures     = kVDAResolverSignatures_Modern;
+            this->vdaSignatureCount = kVDAResolverSignatureCount_Modern;
+            this->gvaSignature      = &kGVAResolverSignature_Tahoe;
         } else {
             this->vdaSignatures     = kVDAResolverSignatures_Modern;
             this->vdaSignatureCount = kVDAResolverSignatureCount_Modern;
+            this->gvaSignature      = &kGVAResolverSignature_Sequoia;
         }
         for (auto& applied : this->vdaSignatureApplied) { applied = 0; }
+        this->gvaSignatureApplied = 0;
         SYSLOG("UserPatch", "Enabling user-space VDA driver patches with dynamic Resolver fallback");
     }
     if (this->submitGuardEnabled) { SYSLOG("UserPatch", "Enabling user-space Metal SubmitGuard (free tail filler)"); }
@@ -906,11 +917,12 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
 
     const bool isGLDriver    = (strstr(vnodeName, "AMDRadeonX5000GLDriver") != nullptr);
     const bool isVADriver    = (strstr(vnodeName, "AMDRadeonVADriver") != nullptr);
+    const bool isAppleGVA    = (strstr(vnodeName, "AppleGVA") != nullptr);
     const bool isSharedCache = (strstr(vnodeName, "dyld_shared_cache") != nullptr) ||
                                (strstr(vnodeName, "dyld") != nullptr);
     vnode_putname(vnodeName);
 
-    if (!isGLDriver && !isVADriver && !isSharedCache) {
+    if (!isGLDriver && !isVADriver && !isAppleGVA && !isSharedCache) {
         return;
     }
 
@@ -964,6 +976,29 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
             }
         }
         return;
+    }
+
+    // AppleGVA Dynamic Resolver path (dyld_shared_cache or standalone AppleGVA bundle)
+    if ((isAppleGVA || isSharedCache) && this->vdaEnabled && this->gvaSignature != nullptr &&
+        this->gvaSignatureApplied < this->gvaSignature->count) {
+        if (!isFairPlayClient(current_task())) {
+            size_t matchOffset = 0;
+            if (matchSignature(bytes, *this->gvaSignature, matchOffset)) {
+                if (matchOffset + this->gvaSignature->patchOffset + this->gvaSignature->replaceSize <= kPageSize) {
+                    if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) == KERN_SUCCESS) {
+                        memcpy(const_cast<UInt8*>(bytes) + matchOffset + this->gvaSignature->patchOffset,
+                               this->gvaSignature->replace, this->gvaSignature->replaceSize);
+                        MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
+                        this->gvaSignatureApplied++;
+                        const auto applied = static_cast<UInt32>(OSIncrementAtomic(&this->vdaAppliedCount) + 1);
+                        NRed::singleton().setProp32("NRedVCNUserApplied", applied);
+                        SYSLOG("UserPatch", "Resolver patched AppleGVA signature at page offset 0x%zX", matchOffset);
+                    } else {
+                        SYSLOG("UserPatch", "Resolver: failed to disable kernel write protection (AppleGVA)");
+                    }
+                }
+            }
+        }
     }
 
     if (!this->resolverEnabled || this->signatures == nullptr || this->signatureCount == 0) {

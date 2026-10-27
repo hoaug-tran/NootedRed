@@ -202,6 +202,8 @@ private:
     const SignaturePatch* vdaSignatures{nullptr};
     size_t                vdaSignatureCount{0};
     size_t                vdaSignatureApplied[kMaxVDASignatures]{};
+    const SignaturePatch* gvaSignature{nullptr};
+    size_t                gvaSignatureApplied{0};
     bool                  resolverEnabled{false};
     bool                  resolverOnly{false};
 
