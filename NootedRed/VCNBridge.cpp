@@ -53,13 +53,7 @@ namespace
 {
 
     const char* const kBootArgNoVDA = "-NRedNoVDA";
-    // Escape hatch: skip the bounded wait for VCN idle in the teardown paths.
-    const char* const kBootArgNoDrain = "-NRedVCNNoDrain";
 
-    // Upper bound for the teardown drain. The engine is normally idle within a frame time; the bound keeps
-    // a wedged channel from stalling the client/accelerator stop path for longer than a QuickLook timeout.
-    constexpr UInt32 kDrainTimeoutMs = 250;
-    constexpr UInt32 kDrainStepMs    = 5;
 
     // All generated data in this tree was derived from
     // macOS 15.8.1 (24H32, Darwin 24.6.0), macOS 14.8.9 (23J631, Darwin 23.6.0)
@@ -233,11 +227,7 @@ VCNBridge& VCNBridge::singleton() { return moduleInstance; }
 void VCNBridge::init()
 {
     this->requested = !checkKernelArgument(kBootArgNoVDA);
-    this->noDrain = this->requested && checkKernelArgument(kBootArgNoDrain);
-    if (this->noDrain) {
-        NRed::singleton().setProp32("NRedVCNNoDrain", 1);
-        SYSLOG("VCN", "VCN teardown drain disabled by boot argument");
-    }
+
     if (!this->requested) {
         DBGLOG("VCN", "VCN bridge is disabled by -NRedNoVDA");
         return;
@@ -273,7 +263,7 @@ void* VCNBridge::allocateEngine(void* const hardware)
     this->hardwareHandle = hardware;
     auto* const engine   = this->engineMC->alloc();
     this->engineAllocated = engine != nullptr;
-    this->vcnEngine       = this->engineAllocated ? engine : nullptr;
+
     NRed::singleton().setProp32("NRedVCNEngineAllocated", static_cast<UInt32>(this->engineAllocated));
     NRed::singleton().setProp32("NRedVDAMediaEnabled", static_cast<UInt32>(this->engineAllocated));
     if (!this->engineAllocated) {
@@ -292,9 +282,7 @@ bool VCNBridge::acceleratorStart(void* const self, IOService* const provider)
 {
     auto& bridge = singleton();
     if (bridge.requested) {
-        // Build marker. It cannot live in init(): that runs at kext load, before NRed::iGPU is set, and
-        // setProp32() is a no-op while iGPU is null, so the marker never reached the registry.
-        NRed::singleton().setProp32("NRedVCNDrainBuild", 2);
+
         if (currentKernelVersion().major() == 22) {
             NRed::singleton().setProp32("NRedVenturaVDARevision", 1);
         }
@@ -337,12 +325,7 @@ bool VCNBridge::acceleratorStart(void* const self, IOService* const provider)
     if (result) { publishStage(10); }
     NRed::singleton().setProp32("NRedVCNAcceleratorStarted", static_cast<UInt32>(result));
 
-    // Nothing has been submitted to the VCN engine at this point, so the idle query must report idle.  A
-    // false result means the query cannot be trusted and the teardown drain is only buying time.
-    if (result && bridge.vcnIsIdle != 0 && bridge.vcnEngine != nullptr) {
-        const auto isIdle = reinterpret_cast<bool (*)(void*)>(bridge.vcnIsIdle);
-        NRed::singleton().setProp32("NRedVCNIdleAtStart", isIdle(bridge.vcnEngine) ? 1 : 0);
-    }
+
 
     if (!result) {
         bridge.loadCompleted   = false;
@@ -362,9 +345,7 @@ void VCNBridge::acceleratorStop(void* const self, IOService* const provider)
 {
     auto& bridge = singleton();
 
-    // Let in-flight VCN work finish before the accelerator releases its memory.  This is the last point at
-    // which the engine is still valid, so the drain has to happen before the original stop runs.
-    bridge.drainVCN("accelerator stop");
+
 
     FunctionCast(acceleratorStop, bridge.orgAcceleratorStop)(self, provider);
 
@@ -373,7 +354,7 @@ void VCNBridge::acceleratorStop(void* const self, IOService* const provider)
     // allocate a fresh engine.
     bridge.engineAllocated = false;
     bridge.hardwareHandle  = nullptr;
-    bridge.vcnEngine       = nullptr;
+
     NRed::singleton().setProp32("NRedVCNEngineAllocated", 0);
     NRed::singleton().setProp32("NRedVDAMediaEnabled", 0);
 }
@@ -428,9 +409,7 @@ void VCNBridge::clientStop(void* const self, void* const provider)
 {
     auto& bridge = singleton();
 
-    // The decoder's IOAccel client is going away; its decode buffers are released by the stop below.  Wait
-    // for the VCN ring to drain first so no read is still pointing at memory that is about to be unmapped.
-    bridge.drainVCN("client stop");
+
 
     const auto address = bridge.engineEnabled() ? bridge.clientStop5000 : bridge.orgClientStop;
     reinterpret_cast<void (*)(void*, void*)>(address)(self, provider);
@@ -443,53 +422,6 @@ UInt64 VCNBridge::surfaceCopy(void* const self, void* const input, const UInt64 
     return reinterpret_cast<UInt64 (*)(void*, void*, UInt64, void*)>(address)(self, input, size, event);
 }
 
-void VCNBridge::drainVCN(const char* const reason)
-{
-    auto& bridge = singleton();
-
-    if (!bridge.engineEnabled() || bridge.vcnEngine == nullptr || bridge.noDrain) { return; }
-
-    // Poll the engine's own idle query so a wedged channel can never stall teardown for longer than the
-    // bound; the driver's waitForIdle is only used when the idle query is unavailable.  Every teardown is
-    // waited on: a timeout is recorded, never used to switch the drain off, so a bad first teardown cannot
-    // leave every later one unprotected.
-    UInt32 waited = 0;
-    bool   idle   = false;
-
-    if (bridge.vcnIsIdle != 0) {
-        const auto isIdle = reinterpret_cast<bool (*)(void*)>(bridge.vcnIsIdle);
-        for (; waited <= kDrainTimeoutMs; waited += kDrainStepMs) {
-            if (isIdle(bridge.vcnEngine)) {
-                idle = true;
-                break;
-            }
-            IOSleep(kDrainStepMs);
-        }
-    }
-    else if (bridge.vcnWaitForIdle != 0) {
-        // The driver's own wait is self-bounding; it cannot tell us whether it actually drained.
-        reinterpret_cast<void (*)(void*, UInt32)>(bridge.vcnWaitForIdle)(bridge.vcnEngine, kDrainTimeoutMs);
-        waited = kDrainTimeoutMs;
-        idle   = true;
-    }
-    else {
-        return;
-    }
-
-    ++bridge.drainCount;
-    bridge.lastWaitMs = waited;
-    if (waited > bridge.maxWaitMs) { bridge.maxWaitMs = waited; }
-    NRed::singleton().setProp32("NRedVCNIdleWaitedMs", waited);
-    NRed::singleton().setProp32("NRedVCNIdleWaitedMaxMs", bridge.maxWaitMs);
-    NRed::singleton().setProp32("NRedVCNIdleDrains", bridge.drainCount);
-
-    if (!idle) {
-        ++bridge.drainTimeouts;
-        NRed::singleton().setProp32("NRedVCNIdleTimeout", 1);
-        NRed::singleton().setProp32("NRedVCNIdleTimeouts", bridge.drainTimeouts);
-        SYSLOG("VCN", "VCN engine still busy after %u ms at %s; teardown continues", waited, reason);
-    }
-}
 
 void VCNBridge::signalWork(void* const hardware)
 {
@@ -682,11 +614,6 @@ void VCNBridge::processKext(KernelPatcher& patcher, const size_t id, const mach_
         ok &= resolve(patcher, id, "__ZN31AMDRadeonX6000_IAMDSMLInterface18createSMLInterfaceEj",
                       this->createSML6000, slide, size);
 
-        // Teardown drain entry points.  Both are optional: if either symbol is missing the drain becomes a
-        // no-op and the bridge behaves exactly as before.
-        resolve(patcher, id, "__ZN30AMDRadeonX6000_AMDVCN2HWEngine6isIdleEv", this->vcnIsIdle, slide, size);
-        resolve(patcher, id, "__ZN26AMDRadeonX6000_AMDHWEngine11waitForIdleEj", this->vcnWaitForIdle, slide,
-                size);
 
         static const char* const kPairs[] = {
             "__ZN37AMDRadeonX6000_AMDGraphicsAccelerator10gMetaClassE",

@@ -867,14 +867,14 @@ auto UserPatches::isPatchedPage(const NativePage& page, const UInt8* const data)
     return true;
 }
 
-static bool matchSignature(const UInt8* const bytes, const UserPatches::SignaturePatch& sig, size_t& matchOffset)
+static bool matchSignature(const UInt8* const bytes, const UserPatches::SignaturePatch& sig, size_t& matchOffset, size_t startOffset = 0)
 {
     if (sig.context == nullptr || sig.mask == nullptr || sig.replace == nullptr) { return false; }
     if (sig.contextSize == 0 || sig.contextSize > UserPatches::kPageSize) { return false; }
     if (sig.patchOffset + sig.replaceSize > sig.contextSize) { return false; }
 
     size_t skipped = 0;
-    for (size_t offset = 0; offset + sig.contextSize <= UserPatches::kPageSize; offset++) {
+    for (size_t offset = startOffset; offset + sig.contextSize <= UserPatches::kPageSize; offset++) {
         bool matches = true;
         for (size_t index = 0; index < sig.contextSize; index++) {
             if ((bytes[offset + index] & sig.mask[index]) != (sig.context[index] & sig.mask[index])) {
@@ -926,10 +926,22 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
         return;
     }
 
+    // Process exclusion defense: WindowServer and loginwindow NEVER decode video via VDA
+    // and must never have their shared cache pages scanned or modified by VDA resolver.
+    if (isSharedCache) {
+        proc_t proc = current_proc();
+        int pid = proc != nullptr ? proc_pid(proc) : 0;
+        char procName[64]{};
+        if (pid > 0) { proc_name(pid, procName, sizeof(procName)); }
+        if (strcmp(procName, "WindowServer") == 0 || strcmp(procName, "loginwindow") == 0) {
+            return;
+        }
+    }
+
     const auto* const bytes = static_cast<const UInt8*>(data);
 
-    // VDA Dynamic Resolver path (AMDRadeonVADriver2)
-    if (isVADriver && this->vdaEnabled && this->vdaSignatures != nullptr && this->vdaSignatureCount > 0) {
+    // VDA Dynamic Resolver path (AMDRadeonVADriver2: loose bundle or dyld_shared_cache)
+    if ((isVADriver || isSharedCache) && this->vdaEnabled && this->vdaSignatures != nullptr && this->vdaSignatureCount > 0) {
         if (VCNBridge::singleton().loadReady() && !isFairPlayClient(current_task())) {
             bool vdaAllApplied = true;
             for (size_t i = 0; i < this->vdaSignatureCount && i < kMaxVDASignatures; ++i) {
@@ -947,12 +959,14 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
                     }
 
                     size_t matchOffset = 0;
-                    if (matchSignature(bytes, sig, matchOffset)) {
+                    size_t searchOffset = 0;
+                    while (sigIdx < kMaxVDASignatures && this->vdaSignatureApplied[sigIdx] < sig.count &&
+                           matchSignature(bytes, sig, matchOffset, searchOffset)) {
                         // Layer 4: Page boundary verification
                         if (matchOffset + sig.patchOffset + sig.replaceSize > kPageSize) {
                             SYSLOG("UserPatch", "Resolver: VDA patch out of page bounds (0x%zX + 0x%zX + 0x%zX)",
                                    matchOffset, sig.patchOffset, sig.replaceSize);
-                            continue;
+                            break;
                         }
 
                         if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) {
@@ -964,17 +978,22 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
 
                         MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
 
-                        SYSLOG("UserPatch", "Resolver patched VDA signature %zu at page offset 0x%zX", sigIdx, matchOffset);
+                        SYSLOG("UserPatch", "Resolver patched VDA signature %zu (site %zu/%zu) at page offset 0x%zX",
+                               sigIdx, this->vdaSignatureApplied[sigIdx] + 1, sig.count, matchOffset);
                         if (sigIdx < kMaxVDASignatures) {
                             this->vdaSignatureApplied[sigIdx]++;
                         }
                         const auto applied = static_cast<UInt32>(OSIncrementAtomic(&this->vdaAppliedCount) + 1);
                         NRed::singleton().setProp32("NRedVCNUserApplied", applied);
+
+                        searchOffset = matchOffset + 1;
                     }
                 }
             }
         }
-        return;
+        if (isVADriver) {
+            return;
+        }
     }
 
     // AppleGVA Dynamic Resolver path (dyld_shared_cache or standalone AppleGVA bundle)
