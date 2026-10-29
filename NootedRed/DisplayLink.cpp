@@ -63,9 +63,14 @@ void DisplayLink::processKext(KernelPatcher& patcher, size_t id, mach_vm_address
         CompatTarget::logIdentity(identity);
     }
 
-    // Resolve before routing. Helpers are independent: an unavailable EDID hook never disables AUX.
-    this->currentMode = reinterpret_cast<CurrentMode>(findUnique(DisplayABI::CurrentMode, slide, size));
-    this->timing      = reinterpret_cast<Timing>(findUnique(DisplayABI::Timing, slide, size));
+    this->currentMode = reinterpret_cast<CurrentMode>(findUnique(DisplayABI::CurrentMode, DisplayABI::CurrentModeMask, slide, size));
+    if (!this->currentMode) {
+        this->currentMode = reinterpret_cast<CurrentMode>(findUnique(DisplayABI::CurrentMode, slide, size));
+    }
+    this->timing      = reinterpret_cast<Timing>(findUnique(DisplayABI::Timing, DisplayABI::TimingMask, slide, size));
+    if (!this->timing) {
+        this->timing  = reinterpret_cast<Timing>(findUnique(DisplayABI::Timing, slide, size));
+    }
     this->readDPCD    = reinterpret_cast<DPCDTransfer>(findUnique(DisplayABI::ReadDPCD, slide, size));
     this->writeDPCD   = reinterpret_cast<DPCDTransfer>(findUnique(DisplayABI::WriteDPCD, slide, size));
 
@@ -135,8 +140,6 @@ UInt32 DisplayLink::wrapAUXTransfer(void* self, DisplayABI::AUXRequest* request,
         sourceSupportsHBR3 = true;
     }
 
-    // Re-probe the requesting port, never a fixed port or a cached panel-wide flag. Original calls
-    // avoid recursion and leave failure/retry semantics with the native AUX implementation.
     DisplayABI::AUXRequest tableReq{};
     tableReq.port    = request->port;
     tableReq.address = DisplayData::SupportedLinkRates;

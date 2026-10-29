@@ -249,7 +249,6 @@ namespace DisplayData
         Success
     };
 
-    // Read/write use the caller's live link. No cached AUX service, capability, brightness range or port.
     template<typename Read, typename Write>
     BrightnessResult setSDRBacklight(Read read, Write write, uint32_t value, uint32_t maximum)
     {
