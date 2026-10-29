@@ -22,17 +22,25 @@ It is read-only, does not install anything and does not need root. It replaces t
 
 ## Usage
 
+The script automatically detects the running macOS version (e.g. `14.8.9`) and stores output into a directory named `nred-compat-<macos-version>`:
+
 ```sh
-python3 tools/collect_compat_data.py --out /tmp/nred-<os>-<apu>
-python3 tools/collect_compat_data.py --out /tmp/nred-<os>-<apu> --zip
+# Collect to /tmp/nred-compat-<macos-version>
+python3 tools/collect_compat_data.py --out /tmp
+
+# Collect and generate /tmp/nred-compat-<macos-version>.zip (supports /tmp and /tmp/)
+python3 tools/collect_compat_data.py --out /tmp/ --zip
+
+# Collect to current directory (./nred-compat-<macos-version>) and zip
+python3 tools/collect_compat_data.py --zip
 ```
 
 Options:
 
 | Option | Meaning |
 | --- | --- |
-| `--out DIR` | output directory (must not exist) |
-| `--zip` | also create `DIR.zip` for uploading |
+| `--out DIR` | destination parent directory (default: current directory, generating `nred-compat-<macos-version>`; supports `/path` and `/path/`) |
+| `--zip` | also create `<out>.zip` archive alongside the output folder |
 | `--cache-dir DIR` | override the dyld shared cache directory |
 | `--include-kc` | copy `SystemKernelExtensions.kc` (hundreds of MB); needed to re-derive VDA data for a new macOS build |
 | `--no-generators` | skip running the VCN/VA/GVA generators (faster, metadata/Chromium data only) |

@@ -72,6 +72,7 @@ class VCNBridge
     mach_vm_address_t surfaceCopy5000{0};
     mach_vm_address_t notifyGfxAccess{0};
 
+
     OSMetaClass* engineMC{nullptr};
     OSMetaClass* sharedMC{nullptr};
     OSMetaClass* clientMC{nullptr};

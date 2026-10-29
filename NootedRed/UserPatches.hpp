@@ -40,8 +40,8 @@
 //    `kPageSize` page image has to match byte for byte before `find` is replaced with `replace`, so a
 //    patch can never hit an unrelated binary.  See analysis/lilu-userpatch.md for the details.
 //
-// The GL table is gated by `-NRedGLFix`/`-NRedGLFixOff`; the optional VA/AppleGVA tables are a separate
-// `-NRedVDA` opt-in and only apply on the validated 0x1638 profile after the kernel VCN bridge is ready.
+// GLFix is enabled by default (pass -NRedNoGLFix to opt out); VDA hardware video acceleration is also
+// enabled by default (pass -NRedNoHEVC to disable HEVC, or -NRedNoVDA to disable VDA completely).
 // Both log under the `UserPatch` tag.
 class UserPatches
 {
@@ -95,6 +95,8 @@ public:
         size_t       skip;
         size_t       count;
         UInt64       pageOffset;
+        const UInt8* find{nullptr};
+        size_t       findSize{0};
     };
 
     // Lookup-style patch for one user-space Mach-O image.
@@ -166,6 +168,7 @@ private:
 
     // Maximum amount of signature patches in a patch set.
     static constexpr size_t kMaxSignatures   = 8;
+    static constexpr size_t kMaxVDASignatures = 16;
 
     // Amount of patches handed over to Lilu's user patcher.
     static constexpr size_t kMaxLiluPatches = 8;
@@ -196,6 +199,11 @@ private:
     const SignaturePatch* signatures{nullptr};
     size_t                signatureCount{0};
     size_t                signatureApplied[kMaxSignatures]{};
+    const SignaturePatch* vdaSignatures{nullptr};
+    size_t                vdaSignatureCount{0};
+    size_t                vdaSignatureApplied[kMaxVDASignatures]{};
+    const SignaturePatch* gvaSignature{nullptr};
+    size_t                gvaSignatureApplied{0};
     bool                  resolverEnabled{false};
     bool                  resolverOnly{false};
 
@@ -234,14 +242,23 @@ private:
     auto installUserPatcher() -> bool;
     auto installNativePagePatcher(KernelPatcher& patcher) -> bool;
     auto buildNativePatches() -> bool;
-    void patchNativePage(const void* data, UInt64 pageOffset);
-    void patchSignaturePage(const void* data, UInt64 pageOffset);
+    void patchNativePage(const void* data, UInt64 pageOffset, void* vnode);
+    void patchSignaturePage(const void* data, UInt64 pageOffset, void* vnode);
 
     // Returns true when `data` is an already-patched version of an exact native page.  This is the normal
     // state for a page after the first process validated it: the kernel keeps the patched bytes, so a later
     // validation would otherwise fall through to the resolver and scan a page that no longer has the
     // original signature context.
     auto isPatchedPage(const NativePage& page, const UInt8* data) const -> bool;
+
+    bool              submitGuardEnabled{false};
+    bool              legacyBlendEnabled{false};
+    mach_vm_address_t orgSharedRegionCheck{0};
+
+    auto installSubmitGuard(KernelPatcher& patcher) -> bool;
+    void applySubmitGuard(proc_t process, void* args);
+    void applyLegacyBlend(vm_map_t map, mach_vm_offset_t base, proc_t process);
+    static int wrapSharedRegionCheck(proc_t process, void* args, int* returnValue);
 
     static void      wrapCsValidatePage(void* vnode, void* pager, UInt64 pageOffset, const void* data, int* validated,
                                         int* tainted, int* nx);

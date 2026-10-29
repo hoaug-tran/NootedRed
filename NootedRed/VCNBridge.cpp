@@ -25,11 +25,13 @@
 #include <Headers/kern_iokit.hpp>
 #include <Headers/kern_mach.hpp>
 #include <Headers/kern_util.hpp>
+#include <IOKit/IOLib.h>
 #include <IOKit/pci/IOPCIDevice.h>
 #include <Kexts.hpp>
 #include <NRed.hpp>
 #include <VCNBridge.hpp>
 #include <VCNKernelData.hpp>
+#include <VCNKernelDataVentura.hpp>
 #if __has_include(<VCNKernelDataTahoe.hpp>)
 #include <VCNKernelDataTahoe.hpp>
 #define NRED_HAS_VCN_TAHOE 1
@@ -50,14 +52,18 @@ static VCNBridge moduleInstance;
 namespace
 {
 
-    const char* const kBootArgVDA = "-NRedVDA";
-    const char* const kBootArgAVC = "-NRedAVC";
+    const char* const kBootArgNoVDA = "-NRedNoVDA";
 
-    // All generated data in this tree was derived from macOS 15.8.1 (24H32, Darwin 24.6.0),
-    // macOS 14.8.9 (23J631, Darwin 23.6.0) and macOS 26.7.1 (25G241, Darwin 25.6.0).
+
+    // All generated data in this tree was derived from
+    // macOS 15.8.1 (24H32, Darwin 24.6.0), macOS 14.8.9 (23J631, Darwin 23.6.0)
+    // and macOS 26.7.1 (25G241, Darwin 25.6.0).
     bool isSupportedOS()
     {
-        if ((currentKernelVersion().major() == 24 && currentKernelVersion().minor() == 6)
+        if (currentKernelVersion().major() == 22 && currentKernelVersion().minor() == 6) {
+            return true;
+        }
+        if (currentKernelVersion().major() == 24
             || (currentKernelVersion().major() == 23 && currentKernelVersion().minor() == 6)) {
             return true;
         }
@@ -75,9 +81,12 @@ namespace
         if (!isSupportedOS()) { return false; }
         // If the early-boot version string is not populated yet, the ABI guards are the remaining
         // protection; once it is visible, require the matching minor release family.
+        if (currentKernelVersion().major() == 22) {
+            return strncmp(osversion, "22G", 3) == 0 || strncmp(osversion, "22H", 3) == 0;
+        }
         if (osversion[0] == '\0') { return true; }
         if (currentKernelVersion().major() == 24) {
-            return strncmp(osversion, "24H", 3) == 0;
+            return strncmp(osversion, "24H", 3) == 0 || strncmp(osversion, "24G", 3) == 0;
         } else if (currentKernelVersion().major() == 23) {
             return strncmp(osversion, "23H", 3) == 0 || strncmp(osversion, "23J", 3) == 0 || strncmp(osversion, "23G", 3) == 0;
         }
@@ -154,6 +163,11 @@ namespace
         const VCNKernelData::SlotGuard* guards{nullptr};
         const char*                     tableSymbol{nullptr};
         size_t                          count{0};
+        if (currentKernelVersion().major() == 22) {
+            guards      = old ? VCNKernelDataVentura::Guards5000 : VCNKernelDataVentura::Guards6000;
+            count       = old ? arrsize(VCNKernelDataVentura::Guards5000) : arrsize(VCNKernelDataVentura::Guards6000);
+            tableSymbol = old ? VCNKernelDataVentura::Table5000 : VCNKernelDataVentura::Table6000;
+        } else
 #ifdef NRED_HAS_VCN_TAHOE
         if (useTahoeVCNData()) {
             guards      = old ? VCNKernelDataTahoe::Guards5000 : VCNKernelDataTahoe::Guards6000;
@@ -212,14 +226,15 @@ VCNBridge& VCNBridge::singleton() { return moduleInstance; }
 
 void VCNBridge::init()
 {
-    this->requested = checkKernelArgument(kBootArgVDA) || checkKernelArgument(kBootArgAVC);
+    this->requested = !checkKernelArgument(kBootArgNoVDA);
+
     if (!this->requested) {
-        DBGLOG("VCN", "VCN bridge is disabled; add -NRedVDA or -NRedAVC to opt in");
+        DBGLOG("VCN", "VCN bridge is disabled by -NRedNoVDA");
         return;
     }
 
     if (!isSupportedOS()) {
-        SYSLOG("VCN", "VCN data is for macOS 14.x (Darwin 23.6), 15.x (Darwin 24.6) or 26.x (Darwin 25.6); hardware decode boot arg is ignored on this build");
+        SYSLOG("VCN", "VCN data supports Ventura 13.6.4 (22G513), Darwin 23.6/24.6/25.6; hardware decode ignored on this build");
         this->requested = false;
         return;
     }
@@ -248,6 +263,7 @@ void* VCNBridge::allocateEngine(void* const hardware)
     this->hardwareHandle = hardware;
     auto* const engine   = this->engineMC->alloc();
     this->engineAllocated = engine != nullptr;
+
     NRed::singleton().setProp32("NRedVCNEngineAllocated", static_cast<UInt32>(this->engineAllocated));
     NRed::singleton().setProp32("NRedVDAMediaEnabled", static_cast<UInt32>(this->engineAllocated));
     if (!this->engineAllocated) {
@@ -266,6 +282,10 @@ bool VCNBridge::acceleratorStart(void* const self, IOService* const provider)
 {
     auto& bridge = singleton();
     if (bridge.requested) {
+
+        if (currentKernelVersion().major() == 22) {
+            NRed::singleton().setProp32("NRedVenturaVDARevision", 1);
+        }
         NRed::singleton().setProp32("NRedVCNAccelStartSeen", 1);
         publishStage(5);
     }
@@ -304,6 +324,9 @@ bool VCNBridge::acceleratorStart(void* const self, IOService* const provider)
     const auto result = FunctionCast(acceleratorStart, bridge.orgAcceleratorStart)(self, provider);
     if (result) { publishStage(10); }
     NRed::singleton().setProp32("NRedVCNAcceleratorStarted", static_cast<UInt32>(result));
+
+
+
     if (!result) {
         bridge.loadCompleted   = false;
         bridge.engineAllocated = false;
@@ -321,6 +344,9 @@ bool VCNBridge::acceleratorStart(void* const self, IOService* const provider)
 void VCNBridge::acceleratorStop(void* const self, IOService* const provider)
 {
     auto& bridge = singleton();
+
+
+
     FunctionCast(acceleratorStop, bridge.orgAcceleratorStop)(self, provider);
 
     // The accelerator is going away; drop all engine/accelerator state without touching the hardware
@@ -328,6 +354,7 @@ void VCNBridge::acceleratorStop(void* const self, IOService* const provider)
     // allocate a fresh engine.
     bridge.engineAllocated = false;
     bridge.hardwareHandle  = nullptr;
+
     NRed::singleton().setProp32("NRedVCNEngineAllocated", 0);
     NRed::singleton().setProp32("NRedVDAMediaEnabled", 0);
 }
@@ -381,6 +408,9 @@ bool VCNBridge::clientStart(void* const self, void* const provider)
 void VCNBridge::clientStop(void* const self, void* const provider)
 {
     auto& bridge = singleton();
+
+
+
     const auto address = bridge.engineEnabled() ? bridge.clientStop5000 : bridge.orgClientStop;
     reinterpret_cast<void (*)(void*, void*)>(address)(self, provider);
 }
@@ -391,6 +421,7 @@ UInt64 VCNBridge::surfaceCopy(void* const self, void* const input, const UInt64 
     const auto address = bridge.engineEnabled() ? bridge.surfaceCopy5000 : bridge.orgSurfaceCopy;
     return reinterpret_cast<UInt64 (*)(void*, void*, UInt64, void*)>(address)(self, input, size, event);
 }
+
 
 void VCNBridge::signalWork(void* const hardware)
 {
@@ -583,6 +614,7 @@ void VCNBridge::processKext(KernelPatcher& patcher, const size_t id, const mach_
         ok &= resolve(patcher, id, "__ZN31AMDRadeonX6000_IAMDSMLInterface18createSMLInterfaceEj",
                       this->createSML6000, slide, size);
 
+
         static const char* const kPairs[] = {
             "__ZN37AMDRadeonX6000_AMDGraphicsAccelerator10gMetaClassE",
             "__ZN35AMDRadeonX6000_AMDAccelVideoContext10gMetaClassE",
@@ -604,6 +636,10 @@ void VCNBridge::processKext(KernelPatcher& patcher, const size_t id, const mach_
         size_t                           callPatchCount = 0;
         const VCNKernelData::CallPatch*  callPatches{nullptr};
         const char*                      signalSymbol{nullptr};
+        if (currentKernelVersion().major() == 22) {
+            callPatches  = VCNKernelDataVentura::getCallPatches(callPatchCount);
+            signalSymbol = VCNKernelDataVentura::SignalSymbol;
+        } else
 #ifdef NRED_HAS_VCN_TAHOE
         if (useTahoeVCNData()) {
             callPatches  = VCNKernelDataTahoe::getCallPatches(callPatchCount);
@@ -615,6 +651,7 @@ void VCNBridge::processKext(KernelPatcher& patcher, const size_t id, const mach_
             signalSymbol = VCNKernelData::SignalSymbol;
         }
         static constexpr size_t kMaxCallPatches = 32;
+        static_assert(arrsize(VCNKernelDataVentura::CallPatches) <= kMaxCallPatches);
         static_assert(arrsize(VCNKernelData::CallPatches_Sonoma) <= kMaxCallPatches);
         static_assert(arrsize(VCNKernelData::CallPatches_Sequoia) <= kMaxCallPatches);
 #ifdef NRED_HAS_VCN_TAHOE

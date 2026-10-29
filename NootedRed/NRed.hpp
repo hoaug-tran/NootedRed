@@ -62,7 +62,8 @@ class NRed
     UInt16           devRevision{0};       // TODO: Remove!
     UInt16           enumRevision{0};      // TODO: Remove!
     UInt64           fbOffset{0};          // TODO: Remove!
-    bool             externalVideo{false}; // any non-iGPU video device; VDA must stay disabled there
+    bool             externalVideo{false}; // external AMD video device; VDA must stay disabled there to avoid conflicts
+    bool             forceVDA{false};      // boot-arg -NRedForceVDA override
 
 public:
     static NRed& singleton();
@@ -73,7 +74,7 @@ public:
     auto  getDevRevision() const { return devRevision; }        // TODO: Remove!
     auto  getEnumRevision() const { return enumRevision; }      // TODO: Remove!
     auto  getFbOffset() const { return fbOffset; }              // TODO: Remove!
-    bool  hasExternalVideo() const { return externalVideo; }    // VDA safety check
+    bool  hasExternalVideo() const { return externalVideo && !forceVDA; }    // VDA safety check
 
     void init();
     void hwLateInit();        // TODO: Remove!

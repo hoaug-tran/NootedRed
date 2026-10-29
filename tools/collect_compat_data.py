@@ -22,9 +22,9 @@ Output layout (one directory, optionally zipped):
 
 Examples:
 
-    python3 tools/collect_compat_data.py --out /tmp/nred-compat-15.8.1
-    python3 tools/collect_compat_data.py --out /tmp/nred-compat-15.8.1 --zip
-    python3 tools/collect_compat_data.py --out /tmp/nred-compat-tahoe --include-kc
+    python3 tools/collect_compat_data.py --out /tmp
+    python3 tools/collect_compat_data.py --out /tmp --zip
+    python3 tools/collect_compat_data.py --zip
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import platform
 import plistlib
 import re
 import shutil
@@ -101,6 +102,19 @@ def run(command: list[str], timeout: int = 120) -> dict:
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def get_macos_version() -> str:
+    ver = platform.mac_ver()[0]
+    if ver:
+        return ver.strip()
+    try:
+        completed = subprocess.run(["sw_vers", "-productVersion"], capture_output=True, text=True, timeout=5)
+        if completed.returncode == 0 and completed.stdout.strip():
+            return completed.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
 
 
 def write_json(path: Path, value) -> None:
@@ -303,7 +317,7 @@ def collect_metadata(root: Path, warnings: list[str]) -> dict:
     write_text(meta / "coremedia-defaults.txt", run(["defaults", "read", "com.apple.coremedia"]).get("stdout", ""))
 
     nootedred_loaded = "org.ChefKiss.NootedRed" in kexts or "org.ChefKiss.NootedRed" in kextstat
-    flags = [flag for flag in ("-NRedGLFix", "-NRedVDA", "-NRedGLFixResolve", "-NRedGLFixResolveOnly")
+    flags = [flag for flag in ("-NRedGLFix", "-NRedVDA", "-NRedAVC", "-NRedAVCEncode", "-NRedNoSubmitGuard", "-NRedGLFixResolve", "-NRedGLFixResolveOnly")
              if flag in boot_args]
     environment = {
         "boot_args": boot_args,
@@ -724,20 +738,43 @@ def collect_vda(root: Path, cache_dir: Path | None, warnings: list[str],
             warnings.append(f"could not copy kernel collection: {error}")
 
     if include_generators:
-        # (header name, generator script, output flag, committed header in the repo)
-        generator_specs = (
-            ("VCNKernelData.hpp", "gen_vcn_kernel_data.py", "--output"),
-            ("VDAVAData.hpp", "gen_vda_va_data.py", "--output"),
-            ("VDAGVAData.hpp", "gen_vda_gva_data.py", "--header"),
-        )
+        os_ver = get_macos_version()
+        if os_ver.startswith("13."):
+            os_suffix = "Ventura"
+        elif os_ver.startswith("14."):
+            os_suffix = "Sonoma"
+        elif os_ver.startswith("15."):
+            os_suffix = "Sequoia"
+        elif os_ver.startswith("26."):
+            os_suffix = "Tahoe"
+        else:
+            os_suffix = ""
+
+        va_name = f"VDAVAData{os_suffix}.hpp" if os_suffix else "VDAVAData.hpp"
+        gva_name = f"VDAGVAData{os_suffix}.hpp" if os_suffix else "VDAGVAData.hpp"
+        vcn_name = f"VCNKernelData{os_suffix}.hpp" if (os_suffix in ("Ventura", "Tahoe")) else "VCNKernelData.hpp"
+
+        generator_specs = [
+            (vcn_name, "gen_vcn_kernel_data.py", "--output"),
+            (va_name, "gen_vda_va_data.py", "--output"),
+            (gva_name, "gen_vda_gva_data.py", "--header"),
+        ]
+        # Also include standard names if different
+        if os_suffix:
+            for fallback_name, script, flag in (
+                ("VCNKernelData.hpp", "gen_vcn_kernel_data.py", "--output"),
+                ("VDAVAData.hpp", "gen_vda_va_data.py", "--output"),
+                ("VDAGVAData.hpp", "gen_vda_gva_data.py", "--header"),
+            ):
+                if fallback_name not in [s[0] for s in generator_specs]:
+                    generator_specs.append((fallback_name, script, flag))
+
         for name, script, output_flag in generator_specs:
             script_path = TOOLS_DIR / script
             output_path = generated / name
             committed = REPO_ROOT / "NootedRed" / name
 
-            # The VA generator recovers the stock (unpatched) cache page from the committed header.
-            # Pre-seed the output with it so regeneration also works while the running kext has the
-            # shared-cache page cache patched.
+            # Pre-seed output with committed header if available
             if not output_path.exists() and committed.is_file():
                 shutil.copyfile(committed, output_path)
 
@@ -754,8 +791,10 @@ def collect_vda(root: Path, cache_dir: Path | None, warnings: list[str],
 
             if outcome["returncode"] != 0:
                 # A patched page cache makes live reads return our replacements; the committed header is
-                # then the only usable source.  Record a --check verdict and keep the verified header.
+                # then the only usable source. Record a --check verdict and keep the verified header.
                 check_command = [sys.executable, str(script_path), "--check"]
+                if committed.is_file():
+                    check_command.extend([output_flag, str(committed)])
                 check = run(check_command, timeout=900)
                 entry["check_returncode"] = check["returncode"]
                 entry["check_stdout"] = check["stdout"][-20000:]
@@ -826,10 +865,11 @@ def collect_manifest(root: Path, args, metadata: dict, chromium: dict, vda: dict
 
 
 def main() -> int:
+    macos_ver = get_macos_version()
+    default_name = f"nred-compat-{macos_ver}"
     parser = argparse.ArgumentParser(description="Collect compatibility data for a macOS build/APU")
-    parser.add_argument("--out", type=Path,
-                        default=Path(f"NootedRed-compat-{datetime.now().strftime('%Y%m%d-%H%M%S')}"),
-                        help="output directory (default: %(default)s)")
+    parser.add_argument("--out", type=Path, default=Path("."),
+                        help=f"destination parent directory (default: current directory, generating {default_name})")
     parser.add_argument("--zip", action="store_true", help="also create <out>.zip")
     parser.add_argument("--cache-dir", type=Path, help="override the dyld shared cache directory")
     parser.add_argument("--include-kc", action="store_true",
@@ -838,7 +878,12 @@ def main() -> int:
                         help="do not try to run the VCN/VA/GVA generators")
     args = parser.parse_args()
 
-    root = args.out
+    out_arg = args.out
+    if out_arg.name.startswith("nred-compat"):
+        root = out_arg
+    else:
+        root = out_arg / default_name
+
     if root.exists():
         raise SystemExit(f"output already exists: {root}")
     root.mkdir(parents=True)
@@ -854,7 +899,7 @@ def main() -> int:
     manifest = collect_manifest(root, args, metadata, chromium, vda, warnings)
 
     if args.zip:
-        archive_path = root.with_suffix(".zip")
+        archive_path = root.with_name(f"{root.name}.zip")
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(root.rglob("*")):
                 if path.is_file():

@@ -28,6 +28,7 @@
 #include <libkern/c++/OSArray.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSMetaClass.h>
+#include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSObject.h>
 #include <libkern/c++/OSString.h>
 
@@ -94,18 +95,75 @@ bool DriverInjector::wrapAddDrivers(void* const self, OSArray* const array, cons
 
             DBGLOG("DriverInjector", "Matched %s, injecting.", driver.identifier);
 
-            if (VDA::singleton().isAVCOnly() && strcmp(driver.identifier, "com.apple.kext.AMDRadeonX5000") == 0) {
+            if (strcmp(driver.identifier, "com.apple.kext.AMDRadeonX5000") == 0) {
                 const auto count = driver.personalities->getCount();
-                for (UInt32 i = 0; i < count; ++i) {
-                    auto* const pDict = OSDynamicCast(OSDictionary, driver.personalities->getObject(i));
-                    if (pDict != nullptr) {
-                        pDict->removeObject("IOGVAHEVCDecode");
-                        pDict->removeObject("IOGVAHEVCDecodeCapabilities");
-                        pDict->removeObject("IOGVAHEVCEncode");
-                        pDict->removeObject("IOGVAHEVCEncodeCapabilities");
+
+                // If hardware video acceleration is completely disabled (-NRedNoVDA):
+                if (!VDA::singleton().isRequested()) {
+                    for (UInt32 i = 0; i < count; ++i) {
+                        auto* const pDict = OSDynamicCast(OSDictionary, driver.personalities->getObject(i));
+                        if (pDict != nullptr) {
+                            pDict->removeObject("IOGVACodec");
+                            pDict->removeObject("IOGVAHEVCDecode");
+                            pDict->removeObject("IOGVAHEVCDecodeCapabilities");
+                            pDict->removeObject("IOGVAHEVCEncode");
+                            pDict->removeObject("IOGVAHEVCEncodeCapabilities");
+                            pDict->removeObject("IOGVAH264EncodeCapabilities");
+                        }
+                    }
+                    if (dict != nullptr) {
+                        dict->removeObject("IOGVACodec");
+                        dict->removeObject("IOGVAHEVCDecode");
+                        dict->removeObject("IOGVAHEVCDecodeCapabilities");
+                        dict->removeObject("IOGVAHEVCEncode");
+                        dict->removeObject("IOGVAHEVCEncodeCapabilities");
+                        dict->removeObject("IOGVAH264EncodeCapabilities");
+                    }
+                    DBGLOG("DriverInjector", "-NRedNoVDA active: stripped all hardware video acceleration capabilities from %s", driver.identifier);
+                }
+                else {
+                    // 1. HEVC Decode policy:
+                    // - If !isHEVCDecodeAllowed() (-NRedNoHEVC): strip IOGVAHEVCDecode and IOGVAHEVCDecodeCapabilities.
+                    // - Default: preserve full HEVC hardware decode (8-bit and 10-bit).
+                    if (!VDA::singleton().isHEVCDecodeAllowed()) {
+                        for (UInt32 i = 0; i < count; ++i) {
+                            auto* const pDict = OSDynamicCast(OSDictionary, driver.personalities->getObject(i));
+                            if (pDict != nullptr) {
+                                pDict->removeObject("IOGVAHEVCDecode");
+                                pDict->removeObject("IOGVAHEVCDecodeCapabilities");
+                            }
+                        }
+                        if (dict != nullptr) {
+                            dict->removeObject("IOGVAHEVCDecode");
+                            dict->removeObject("IOGVAHEVCDecodeCapabilities");
+                        }
+                        DBGLOG("DriverInjector", "-NRedNoHEVC active: stripped HEVC decode capabilities from %s", driver.identifier);
+                    }
+                    else {
+                        DBGLOG("DriverInjector", "Full HEVC hardware decode (8-bit and 10-bit) enabled for %s", driver.identifier);
+                    }
+
+                    // 2. HEVC Encode policy:
+                    // - If !isHEVCEncodeAllowed() (-NRedNoHEVC): strip IOGVAHEVCEncode and IOGVAHEVCEncodeCapabilities.
+                    // - Default: preserve 8-bit HEVC encode.
+                    if (!VDA::singleton().isHEVCEncodeAllowed()) {
+                        for (UInt32 i = 0; i < count; ++i) {
+                            auto* const pDict = OSDynamicCast(OSDictionary, driver.personalities->getObject(i));
+                            if (pDict != nullptr) {
+                                pDict->removeObject("IOGVAHEVCEncode");
+                                pDict->removeObject("IOGVAHEVCEncodeCapabilities");
+                            }
+                        }
+                        if (dict != nullptr) {
+                            dict->removeObject("IOGVAHEVCEncode");
+                            dict->removeObject("IOGVAHEVCEncodeCapabilities");
+                        }
+                        DBGLOG("DriverInjector", "-NRedNoHEVC active: stripped HEVC encode capabilities from %s", driver.identifier);
+                    }
+                    else {
+                        DBGLOG("DriverInjector", "Preserved HEVC 8-bit encode capabilities for %s", driver.identifier);
                     }
                 }
-                DBGLOG("DriverInjector", "-NRedAVC active: stripped HEVC decode/encode capabilities from %s", driver.identifier);
             }
 
             array->merge(driver.personalities);

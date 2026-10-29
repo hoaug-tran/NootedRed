@@ -24,28 +24,33 @@
 
 // Runtime policy layer for the VDA/VCN hardware video decode work.
 //
-// `init()` records the opt-in `-NRedVDA` boot argument and `processPatcher()` logs the media capability of
-// the running device's `DeviceProfile`.  The actual engine/bridge readiness lives in `VCNBridge`; this class
-// only keeps the user intent and the profile view, and remains inert when the boot argument is absent.
+// Hardware video acceleration is enabled by default (AVC + HEVC).
+// Pass -NRedNoHEVC to disable HEVC while keeping AVC hardware acceleration.
+// Pass -NRedNoVDA to disable all hardware video acceleration completely.
 class VDA
 {
-    bool requested{false};
-    bool avcOnly{false};
+    bool enabled{true};
+    bool hevcAllowed{true};
 
 public:
     static VDA& singleton();
 
-    // Parses the -NRedVDA and -NRedAVC boot arguments.  Called from `NRed::init()`, before the device is known.
+    // Parses -NRedNoVDA and -NRedNoHEVC boot arguments. Called from NRed::init().
     void init();
 
-    // Resolves the running device profile and logs the media policy.  Called from `NRed::processPatcher()`
-    // once the device ID is known.
+    // Resolves the running device profile and logs the media policy. Called from NRed::processPatcher().
     void processPatcher();
 
-    // True when the user explicitly opted in with -NRedVDA or -NRedAVC.
-    bool isRequested() const { return this->requested; }
+    // True when hardware video acceleration is enabled (default true, disabled by -NRedNoVDA).
+    bool isRequested() const { return this->enabled; }
+    bool isEnabled() const { return this->enabled; }
 
-    // True when the user opted in with -NRedAVC (AVC/H.264 only, HEVC disabled).
-    bool isAVCOnly() const { return this->avcOnly; }
+    // True when only AVC is enabled and HEVC is disabled (-NRedNoHEVC).
+    bool isAVCOnly() const { return this->enabled && !this->hevcAllowed; }
 
+    // True when HEVC 8-bit hardware encode is allowed (default true, disabled by -NRedNoHEVC or -NRedNoVDA).
+    bool isHEVCEncodeAllowed() const { return this->enabled && this->hevcAllowed; }
+
+    // True when HEVC hardware decode (8-bit and 10-bit) is allowed (default true, disabled by -NRedNoHEVC or -NRedNoVDA).
+    bool isHEVCDecodeAllowed() const { return this->enabled && this->hevcAllowed; }
 };
