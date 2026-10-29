@@ -241,9 +241,26 @@ IOReturn Backlight::wrapGetAttributeForConnection(IOService* framebuffer, IOInde
 {
     const auto ret = FunctionCast(wrapGetAttributeForConnection, singleton().orgGetAttributeForConnection)(
         framebuffer, connectIndex, attribute, value);
-    if (attribute != kIOAppleBacklightAttribute) { return ret; }
-    *value = singleton().curBacklightLvl;
-    return kIOReturnSuccess;
+    if (attribute == kIOAppleBacklightAttribute) {
+        if (value) { *value = singleton().curBacklightLvl; }
+        return kIOReturnSuccess;
+    }
+    constexpr IOSelect kAttributeEDID = 'edid';
+    if (ret == kIOReturnSuccess && attribute == kAttributeEDID && value && *value) {
+        auto* data = reinterpret_cast<OSData*>(*value);
+        if (data && data->getLength() >= DisplayData::EDIDBlockSize) {
+            auto* edidBytes = const_cast<UInt8*>(static_cast<const UInt8*>(data->getBytesNoCopy()));
+            if (DisplayData::sanitizeAndRepairEDID(edidBytes, data->getLength())) {
+                DBGLOG("Backlight", "Sanitized and repaired connection %d EDID data (%u bytes)", connectIndex, data->getLength());
+            }
+            if (checkKernelArgument("-NRedNoProMotion") || checkKernelArgument("-NRedNoVRR")) {
+                if (DisplayData::disableEDIDVRR(edidBytes, data->getLength())) {
+                    DBGLOG("Backlight", "Disabled ProMotion VRR range for connection %d", connectIndex);
+                }
+            }
+        }
+    }
+    return ret;
 }
 
 void* Backlight::wrapLinkCreate(void* data)

@@ -32,8 +32,19 @@ namespace DisplayData
     constexpr uint32_t SupportedLinkRates = 0x010, EDPRevision = 0x700;
     constexpr uint32_t BacklightCaps = 0x701, BacklightControl = 0x721, BacklightLevel = 0x722;
     constexpr size_t   LinkRateTableSize = 16;
-    constexpr uint16_t HBR3TableRate     = 8100000 / 200;    // kHz / 200 kHz, eDP table units.
-    constexpr uint8_t  HBR3LegacyRate    = 0x1E;
+
+    constexpr uint8_t  LinkRateRBR  = 0x06;
+    constexpr uint8_t  LinkRateHBR  = 0x0A;
+    constexpr uint8_t  LinkRateHBR2 = 0x14;
+    constexpr uint8_t  LinkRateHBR3 = 0x1E;
+
+    constexpr uint16_t TableRateRBR  = 1620000 / 200;
+    constexpr uint16_t TableRateHBR  = 2700000 / 200;
+    constexpr uint16_t TableRateHBR2 = 5400000 / 200;
+    constexpr uint16_t TableRateHBR3 = 8100000 / 200;
+
+    constexpr uint16_t HBR3TableRate  = TableRateHBR3;
+    constexpr uint8_t  HBR3LegacyRate = LinkRateHBR3;
 
     inline uint8_t checksum(const uint8_t* bytes, size_t length)
     {
@@ -45,9 +56,7 @@ namespace DisplayData
     inline bool validEDIDContainer(const uint8_t* edid, size_t length)
     {
         constexpr uint8_t header[] = {0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0};
-        if (!edid || length < EDIDBlockSize || length % EDIDBlockSize
-            || length / EDIDBlockSize != size_t(edid[126]) + 1)
-        {
+        if (!edid || length < EDIDBlockSize || length % EDIDBlockSize) {
             return false;
         }
         for (size_t i = 0; i < sizeof(header); ++i) {
@@ -56,66 +65,181 @@ namespace DisplayData
         return checksum(edid, EDIDBlockSize) == 0;
     }
 
-    // Explicit recovery only: a full-length DisplayID 1.3 section containing one Type-I timing
-    // block followed by a zero block header. The caller must opt in: damaged padding cannot be
-    // distinguished from lost data automatically. Never synthesize a timing or remove CTA data.
+    inline bool sanitizeAndRepairEDID(uint8_t* edid, size_t length)
+    {
+        constexpr uint8_t header[] = {0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0};
+        if (!edid || length < EDIDBlockSize) { return false; }
+
+        for (size_t i = 0; i < sizeof(header); ++i) {
+            if (edid[i] != header[i]) { return false; }
+        }
+
+        bool modified = false;
+
+        const uint8_t baseSum = checksum(edid, EDIDBlockSize);
+        if (baseSum != 0) {
+            edid[EDIDBlockSize - 1] = static_cast<uint8_t>(edid[EDIDBlockSize - 1] - baseSum);
+            modified = true;
+        }
+
+        const size_t totalBlocks = length / EDIDBlockSize;
+        const size_t maxAllowedExts = totalBlocks > 0 ? totalBlocks - 1 : 0;
+        if (edid[126] > maxAllowedExts) {
+            edid[126] = static_cast<uint8_t>(maxAllowedExts);
+            edid[EDIDBlockSize - 1] = static_cast<uint8_t>(edid[EDIDBlockSize - 1] - checksum(edid, EDIDBlockSize));
+            modified = true;
+        }
+
+        const size_t blockCount = static_cast<size_t>(edid[126]) + 1;
+
+        for (size_t b = 1; b < blockCount && b < totalBlocks; ++b) {
+            uint8_t* block = edid + (b * EDIDBlockSize);
+            const uint8_t tag = block[0];
+
+            if (tag == 0x70) {
+                const uint8_t payloadBytes = block[2];
+                constexpr size_t sectionHeader = 5;
+
+                if (payloadBytes <= (EDIDBlockSize - sectionHeader - 2)) {
+                    const size_t sectionEnd = sectionHeader + payloadBytes;
+
+                    if (block[5] == 0x03 && block[6] == 0x01 && block[7] > 0) {
+                        const size_t actualPayloadEnd = sectionHeader + 3 + block[7];
+                        if (actualPayloadEnd < EDIDBlockSize - 1 && actualPayloadEnd < sectionEnd) {
+                            for (size_t p = actualPayloadEnd + 1; p < EDIDBlockSize - 1; ++p) {
+                                if (block[p] != 0) {
+                                    block[p] = 0;
+                                    modified = true;
+                                }
+                            }
+                        }
+                    }
+
+                    const uint8_t secSum = checksum(block + 1, sectionEnd);
+                    if (secSum != 0) {
+                        block[sectionEnd] = static_cast<uint8_t>(block[sectionEnd] - secSum);
+                        modified = true;
+                    }
+                }
+            }
+
+            const uint8_t extSum = checksum(block, EDIDBlockSize);
+            if (extSum != 0) {
+                block[EDIDBlockSize - 1] = static_cast<uint8_t>(block[EDIDBlockSize - 1] - extSum);
+                modified = true;
+            }
+        }
+
+        return modified || (checksum(edid, EDIDBlockSize) == 0);
+    }
+
     inline bool repairDisplayID(uint8_t* edid, size_t length)
     {
-        if (!validEDIDContainer(edid, length)) { return false; }
-        constexpr size_t  sectionHeader = 5, blockHeader = 3, timingSize = 20;
-        constexpr uint8_t maxPayload = EDIDBlockSize - sectionHeader - 2;
-        size_t            candidate = 0, payloadEnd = 0;
-        for (size_t offset = EDIDBlockSize; offset < length; offset += EDIDBlockSize) {
-            const auto*  block     = edid + offset;
-            const bool   displayID = block[0] == 0x70;
-            const size_t end       = sectionHeader + block[2];
-            const bool   valid     = checksum(block, EDIDBlockSize) == 0
-                                     && (!displayID || (end < EDIDBlockSize - 1 && checksum(block + 1, end) == 0));
-            if (valid) { continue; }
-            if (candidate || !displayID || block[1] != 0x13 || block[2] != maxPayload || block[4] != 0
-                || block[5] != 0x03 || block[6] != 0x01 || !block[7] || block[7] % timingSize)
-            {
-                return false;
+        return sanitizeAndRepairEDID(edid, length);
+    }
+
+    inline bool disableEDIDVRR(uint8_t* edid, size_t length)
+    {
+        if (!edid || length < EDIDBlockSize) { return false; }
+        bool modified = false;
+
+        constexpr size_t descriptorOffsets[] = {54, 72, 90, 108};
+        for (const auto offset : descriptorOffsets) {
+            uint8_t* desc = edid + offset;
+            if (desc[0] == 0x00 && desc[1] == 0x00 && desc[2] == 0x00 && desc[3] == 0xFD) {
+                if (desc[5] != desc[6] && desc[6] > 0) {
+                    desc[5] = desc[6];
+                    modified = true;
+                }
             }
-            payloadEnd = sectionHeader + blockHeader + block[7];
-            if (payloadEnd + blockHeader >= EDIDBlockSize - 2) { return false; }
-            if (block[payloadEnd] || block[payloadEnd + 1] || block[payloadEnd + 2]) { return false; }
-            candidate = offset;
         }
-        if (!candidate) { return false; }
-        auto* block = edid + candidate;
-        block[2]    = static_cast<uint8_t>(payloadEnd - sectionHeader);
-        for (size_t i = payloadEnd; i < EDIDBlockSize; ++i) { block[i] = 0; }
-        block[payloadEnd]        = static_cast<uint8_t>(0 - checksum(block + 1, payloadEnd - 1));
-        block[EDIDBlockSize - 1] = static_cast<uint8_t>(0 - checksum(block, EDIDBlockSize - 1));
-        return true;
+
+        if (modified) {
+            const uint8_t baseSum = checksum(edid, EDIDBlockSize);
+            edid[EDIDBlockSize - 1] = static_cast<uint8_t>(edid[EDIDBlockSize - 1] - baseSum);
+        }
+
+        return modified;
+    }
+
+    struct RateEvaluation
+    {
+        uint8_t  recommendedRate{0};
+        uint16_t highestTableRate{0};
+        bool     isTableSupported{false};
+        bool     hasHBR3{false};
+        bool     hasHBR2{false};
+        bool     hasHBR{false};
+    };
+
+    inline RateEvaluation evaluateLinkRateTable(const uint8_t* table, size_t length)
+    {
+        RateEvaluation eval{};
+        if (!table || length != LinkRateTableSize) { return eval; }
+
+        for (size_t i = 0; i < length; i += 2) {
+            const auto rate = static_cast<uint16_t>(uint16_t(table[i]) | (uint16_t(table[i + 1]) << 8));
+            if (!rate) { continue; }
+            eval.isTableSupported = true;
+            if (rate > eval.highestTableRate) { eval.highestTableRate = rate; }
+            if (rate >= TableRateHBR3) { eval.hasHBR3 = true; }
+            else if (rate >= TableRateHBR2) { eval.hasHBR2 = true; }
+            else if (rate >= TableRateHBR) { eval.hasHBR = true; }
+        }
+
+        if (eval.hasHBR3) { eval.recommendedRate = LinkRateHBR3; }
+        else if (eval.hasHBR2) { eval.recommendedRate = LinkRateHBR2; }
+        else if (eval.hasHBR) { eval.recommendedRate = LinkRateHBR; }
+        else if (eval.highestTableRate >= TableRateRBR) { eval.recommendedRate = LinkRateRBR; }
+        else if (eval.isTableSupported) { eval.recommendedRate = LinkRateHBR2; }
+
+        return eval;
     }
 
     inline bool advertisesHBR3(uint8_t revision, const uint8_t* table, size_t length)
     {
         if (revision < 3 || !table || length != LinkRateTableSize) { return false; }
-        bool     found = false, terminated = false;
-        uint16_t previous = 0;
-        for (size_t i = 0; i < length; i += 2) {
-            const auto rate = static_cast<uint16_t>(uint16_t(table[i]) | uint16_t(table[i + 1]) << 8);
-            if (!rate) {
-                terminated = true;
-                continue;
-            }
-            if (terminated || rate <= previous) { return false; }
-            previous  = rate;
-            found    |= rate == HBR3TableRate;
+        const auto eval = evaluateLinkRateTable(table, length);
+        return eval.hasHBR3;
+    }
+
+    inline bool normalizeReceiverRate(uint8_t* caps, size_t length, bool sourceSupportsHBR3, const RateEvaluation& eval)
+    {
+        if (!caps || length < 3 || caps[0] < 0x11) { return false; }
+
+        const uint8_t originalRate = caps[1];
+        uint8_t targetRate = originalRate;
+
+        if (eval.isTableSupported && eval.recommendedRate != 0) {
+            targetRate = eval.recommendedRate;
+        } else if (originalRate == 0) {
+            targetRate = LinkRateHBR2;
         }
-        return found;
+
+        if (targetRate == LinkRateHBR3 && !sourceSupportsHBR3) {
+            targetRate = LinkRateHBR2;
+        }
+
+        const uint8_t lanes = caps[2] & 0x1F;
+        if (lanes == 0) {
+            caps[2] = (caps[2] & 0xE0) | 0x04;
+        }
+
+        if (targetRate != 0 && (originalRate == 0 || targetRate > originalRate || (originalRate == LinkRateHBR3 && !sourceSupportsHBR3))) {
+            caps[1] = targetRate;
+            return true;
+        }
+
+        return false;
     }
 
     inline bool normalizeReceiverRate(uint8_t* caps, size_t length, bool sourceHBR3, bool sinkHBR3)
     {
-        if (!caps || length < 3 || !sourceHBR3 || !sinkHBR3 || caps[0] < 0x13 || caps[1]) { return false; }
-        const auto lanes = caps[2] & 0x1F;
-        if (lanes != 1 && lanes != 2 && lanes != 4) { return false; }
-        caps[1] = HBR3LegacyRate;
-        return true;
+        RateEvaluation eval{};
+        eval.isTableSupported = sinkHBR3;
+        eval.hasHBR3 = sinkHBR3;
+        eval.recommendedRate = sinkHBR3 ? LinkRateHBR3 : LinkRateHBR2;
+        return normalizeReceiverRate(caps, length, sourceHBR3, eval);
     }
 
     enum class BrightnessResult
